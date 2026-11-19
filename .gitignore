@@ -1,0 +1,16 @@
+# Secrets - never upload
+.env
+.streamlit/secrets.toml
+
+# Local database and backups (the online app uses Supabase)
+debet.db
+debet.db*
+*.db
+*.bak*
+last_checked.txt
+
+# Old versions and local-only files
+archive/
+__pycache__/
+run_debet_phone.bat
+set_database_url.ps1
