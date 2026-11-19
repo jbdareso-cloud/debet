@@ -14,3 +14,5 @@ archive/
 __pycache__/
 run_debet_phone.bat
 set_database_url.ps1
+set_admin_password.py
+upload_to_github/
