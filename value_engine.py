@@ -27,7 +27,7 @@ MAX_MODEL_GAP = 0.10    # skip if Grok and Claude are more than 10 points apart 
 MIN_ODDS = 1.40         # tips priced below this are recorded but not analysed (rarely value; saves cost)
 
 BRIEF_MAX_TOKENS = 500
-ESTIMATE_MAX_TOKENS = 350
+ESTIMATE_MAX_TOKENS = 600   # hidden reasoning counts too; 350 sometimes cut Grok's JSON off
 CHALLENGE_MAX_TOKENS = 300
 
 GROK = [GROK_MODEL, GROK_FALLBACK_MODEL]
@@ -177,12 +177,18 @@ def analyze_tip(tip_text, extra_notes="", default_match_date=None):
 
 def _estimate(models, label, match, match_date, brief, extra, custom, usage):
     custom_key = f' "custom": 0.00,  /* probability of: {custom} */' if custom else ""
-    text, model = _chat(models, [
+    messages = [
         {"role": "system", "content": ESTIMATE_SYSTEM},
         {"role": "user", "content": ESTIMATE_USER.format(match=match, match_date=match_date or "unknown",
                                                          extra=extra, brief=brief, custom_key=custom_key)},
-    ], temperature=0.2, max_tokens=ESTIMATE_MAX_TOKENS, usage=usage, label=label)
-    raw = _parse_json_object(re.sub(r"/\*.*?\*/", "", text))
+    ]
+    raw = None
+    for attempt, cap in enumerate((ESTIMATE_MAX_TOKENS, ESTIMATE_MAX_TOKENS * 2)):  # one retry with more room
+        text, model = _chat(models, messages, temperature=0.2, max_tokens=cap, usage=usage,
+                            label=label if attempt == 0 else f"{label} retry")
+        raw = _parse_json_object(re.sub(r"/\*.*?\*/", "", text))
+        if raw is not None:
+            break
     if raw is None:
         raise RuntimeError(f"{label} did not return JSON: {text[:200]!r}")
     return {"model": model, "probs": complete_probs(raw), "reasons": _clean_list(raw.get("reasons")),
