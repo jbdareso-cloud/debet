@@ -225,6 +225,10 @@ def verify_pending_tips(force=False):
         except Exception as exc:
             summary["errors"].append({"tip_id": None, "match": "user bet slips", "error": str(exc)})
         summary["cost"] = summarize_usage(usage)
+        try:
+            db.record_ai_cost("Result check", summary["cost"].get("total_usd"))
+        except Exception:
+            pass
         print(f"[DeBet cost] Result verification ({summary['checked']} matches): "
               f"{format_cost(summary['cost'])}", flush=True)
     return summary
