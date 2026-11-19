@@ -5,7 +5,6 @@ The old multi-user/subscriber version is kept in archive/app_multiuser.py.
 
 import json
 import threading
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, datetime, timedelta, timezone
 
 import pandas as pd
@@ -28,6 +27,7 @@ def _load_cloud_secrets():
 _load_cloud_secrets()
 
 import database as db  # noqa: E402  (must come after the secrets are loaded)
+import analysis_jobs as ajobs
 import result_verifier as rv
 import screenshot_reader as sr
 import value_engine as ve
@@ -62,6 +62,11 @@ h1, h2, h3, h4 {font-family:'Barlow Condensed','Inter',sans-serif !important; le
 .element-container:has(iframe[height="0"]), [data-testid="stElementContainer"]:has(iframe[height="0"]) {display:none;}
 @media (max-width: 768px) {
   .block-container, [data-testid="stMainBlockContainer"] {padding:1rem .6rem 2rem !important;}
+  /* keep the logo and the settings button on one row */
+  .st-key-topbar [data-testid="stHorizontalBlock"] {flex-wrap:nowrap !important; flex-direction:row !important;}
+  .st-key-topbar [data-testid="stColumn"]:first-child {flex:1 1 auto !important; min-width:0 !important;}
+  .st-key-topbar [data-testid="stColumn"]:last-child {flex:0 0 64px !important; min-width:64px !important;}
+  [data-testid="stMetricLabel"] p {white-space:normal !important;}
   .stButton button, [data-testid="stFormSubmitButton"] button {width:100% !important; min-height:44px;}
   input, textarea, [data-baseweb="select"] {font-size:16px !important;}
   [data-testid="stHorizontalBlock"]:has(> [data-testid="stColumn"] [data-testid="stMetric"]) {
@@ -98,7 +103,6 @@ DECISION_BADGE = {"BEST": "⭐ Best pick", "VALUE": "🟢 Value", "NO VALUE": "�
 GROUP_ROWS = ((db.TIP_GROUPS[0], "Tipster's 4 tips", range(1, 5)),
               (db.TIP_GROUPS[1], "My own picks (optional)", range(5, 8)))
 SHOT_TARGETS = {"Tipster's slots (#1–#4)": range(1, 5), "My slots (#5–#7)": range(5, 8)}
-DEBATE_WORKERS = 2  # 3 parallel debates triggered OpenRouter "402 ... in-flight requests" errors
 EAT = timezone(timedelta(hours=3))
 
 
@@ -196,7 +200,7 @@ def login_page():
                 st.rerun()
             db.record_login_failure(ident)
             st.error("Wrong login or password.")
-        st.caption("Forgot it? On the computer running DeBet: `python database.py --reset-admin-password`")
+        st.caption("Forgot it? On your PC, run `set_admin_password.py` in the debet folder.")
 
 
 # ---------------------------------------------------------------------------
@@ -261,15 +265,17 @@ def dashboard(user):
     money = db.get_user_bankroll_stats(user["id"], 30)
     tipster, best = lab["group_a"], lab["ai_best"]
     c = st.columns(4)
-    c[0].metric("Real money · 30 days", fmt_signed(money["net_profit"]),
+    c[0].metric("Profit · 30d", fmt_signed(money["net_profit"]),
                 f"ROI {money['roi']:+.1f}%" if money["roi"] is not None else None,
                 help="From the bets you logged in My Bets (settled slips only).")
-    c[1].metric("Tipster's 4 · win rate", f"{tipster['win_rate']:.0f}%" if tipster["settled"] else "—",
+    c[1].metric("Tipster", f"{tipster['win_rate']:.0f}%" if tipster["settled"] else "—",
                 units(tipster), help="Every tipster tip from the last 30 days, 1 unit each at their odds.")
-    c[2].metric("AI best pick · win rate", f"{best['win_rate']:.0f}%" if best["settled"] else "—", units(best),
-                help="Only the one tip a day the AI picked as best value (or none).")
-    c[3].metric("Waiting for result", lab["raw_all"]["pending"],
-                help="Tips from the last 30 days that haven't been settled yet.")
+    c[2].metric("AI best pick", f"{best['win_rate']:.0f}%" if best["settled"] else "—", units(best),
+                help="Win rate of the one tip a day the AI picked as best value (or none), 1 unit each.")
+    spend, calls = db.ai_spend(since_month_start=True)
+    c[3].metric("AI spend · month", f"${spend:.2f}", f"{calls} runs" if calls else None, delta_color="off",
+                help="Everything DeBet paid OpenRouter this calendar month: analyses, screenshot reading and "
+                     "result checks. Set a spending limit on openrouter.ai as a safety net.")
 
     pending = [t for t in db.list_tips(result="PENDING") if t.get("match_date") is None
                or str(t["match_date"])[:10] >= (now.date() - timedelta(days=3)).isoformat()]
@@ -309,6 +315,18 @@ def dashboard(user):
         "Win rate": st.column_config.NumberColumn(format="%.0f%%"),
         "Profit (units)": st.column_config.NumberColumn(format="%+.2f"),
         "ROI": st.column_config.NumberColumn(format="%+.1f%%")})
+    st.markdown("#### 📈 Beating the closing price? · last 30 days")
+    clv = db.get_clv_stats(user["id"])
+    if not any(v[1] for v in clv.values()):
+        st.caption("Enter **closing odds** (the price just before kickoff) in the Results tab. If the odds you take "
+                   "are regularly above the closing odds, that's the earliest sign of a real edge - long before "
+                   "profit can prove it.")
+    else:
+        names = {"tipster": "Tipster's listed odds", "mine": "My own picks", "my_bets": "Odds I actually got"}
+        st.dataframe(pd.DataFrame([{"Odds": names[k], "Average vs closing": (f"{v[0]:+.1f}%" if v[1] else "—"),
+                                    "Tips": v[1]} for k, v in clv.items()]), hide_index=True, width="stretch")
+        st.caption("Positive = better than the market's final price (good). Consistently negative = no edge.")
+
     st.markdown("#### 🎯 Which forecaster is sharper?")
     acc = db.get_model_accuracy()
     if not acc["settled"]:
@@ -330,6 +348,10 @@ def analyse_tab():
                f"+{ve.VALUE_MIN:.0%}) or says **No bet today**. Tips under {ve.MIN_ODDS:.2f} are recorded but not analysed.")
     if "studio_date" not in st.session_state:
         st.session_state["studio_date"] = datetime.now(EAT).date()
+    job = db.latest_job()
+    if job and job["status"] == "running":
+        job_progress(job["id"])
+        return
     screenshot_box()
     entries = []
     with st.form("studio"):
@@ -344,14 +366,15 @@ def analyse_tab():
                                          placeholder=f"#{n}  e.g. Arsenal vs Chelsea over 2.5 1.95" if n in (1, 5) else f"#{n}")
                     entries.append({"slot_number": n, "group": group, "line": line.strip()})
         notes = st.text_input("Notes for the AI (optional)")
+        again = st.checkbox("Analyse again even if a tip was already analysed in the last few days")
         run = st.form_submit_button("⚔️ Analyse picks", type="primary")
 
     if run:
         filled = [e for e in entries if e["line"]]
-        bad = []
+        bad, parsed = [], {}
         for e in filled:
             try:
-                parse_tip(e["line"])
+                parsed[e["slot_number"]] = parse_tip(e["line"])
             except ValueError as exc:
                 bad.append(f"#{e['slot_number']} `{e['line']}`: {exc}")
         if not filled:
@@ -359,28 +382,63 @@ def analyse_tab():
         elif bad:
             st.error("Fix these first:\n\n" + "\n\n".join(bad))
         else:
-            run_debates(filled, notes, match_date)
+            dupes = set() if again else db.find_duplicates(
+                [(p["match_name"], p["market"]) for p in parsed.values()])
+            fresh = [e for e in filled if (parsed[e["slot_number"]]["match_name"].lower(),
+                                           parsed[e["slot_number"]]["market"].lower()) not in dupes]
+            if dupes:
+                st.warning("Already analysed recently, skipped (tick the box to redo them): "
+                           + ", ".join(f"{e['line']}" for e in filled if e not in fresh))
+            if fresh:
+                ajobs.start(fresh, notes, match_date.isoformat() if match_date else None)
+                st.rerun()
 
-    results = st.session_state.get("studio_results") or []
-    if results:
-        spent = sum((r.get("cost") or {}).get("total_usd") or 0 for r in results) \
-            + ((st.session_state.get("day_cost") or {}).get("total_usd") or 0)
-        message = st.session_state.get("day_decision") or ""
-        (st.success if message.startswith("Best pick") else st.info)(f"**{message}**")
-        st.markdown(f"#### Results of this run · AI cost ${spent:.3f}")
-        for r in sorted(results, key=lambda r: r["slot_number"]):
-            tip = db.get_tip(r["tip_id"]) if r.get("tip_id") else None
-            if tip:
-                tip_card(tip, r.get("result"))
-            else:
-                st.error(f"#{r['slot_number']} {r['line']} - failed and not saved: {r.get('error')}")
-
-    shown = {r.get("tip_id") for r in results}
+    if job and job["status"] != "running":
+        job_summary(job)
+    shown = set(job["tip_ids"]) if job else set()
     recent = [t for t in db.list_tips(result="PENDING", limit=40) if t["id"] not in shown]
     if recent:
         st.markdown("#### Earlier picks still waiting for a result")
         for t in recent:
             tip_card(t)
+
+
+@st.fragment(run_every=3)
+def job_progress(job_id):
+    """Live progress of a background analysis. It keeps running on the server even if you lock your
+    phone or close the page - coming back shows where it is."""
+    job = db.get_job(job_id)
+    if not job or job["status"] != "running":
+        st.rerun()  # finished: redraw the whole tab with the results
+    st.info("⏳ **Analysis running on the server.** You can lock your phone or leave this page - "
+            "come back any time to see the results.")
+    st.progress(job["done"] / max(job["total"], 1), text=f"{job['message'] or 'Starting...'} "
+                                                       f"({job['done']}/{job['total']} tips)")
+    for tid in job["tip_ids"]:
+        t = db.get_tip(tid)
+        if t:
+            st.caption(f"✓ {t['match_name']} - {t['user_proposed_tip']} · {ai_label(t)}")
+
+
+def job_summary(job):
+    """Banner + cards for the latest finished analysis run."""
+    message = job["message"] or ""
+    if job["status"] in ("failed", "interrupted"):
+        st.error(message if job["status"] == "failed" else
+                 "The last analysis was interrupted (the app restarted). Tips already finished are saved below; "
+                 "run the rest again.")
+    elif message.startswith("Best pick"):
+        stake = db.suggested_stake(st.session_state.get("user_id"))
+        stake_txt = f"  \n💰 Suggested stake: **{fmt_money(stake)}** ({db.bankroll_settings()[1]:g}% of your bankroll)" \
+            if stake else "  \n:gray[Set your bankroll in My Bets to see a suggested stake.]"
+        st.success(f"**⭐ {message}**{stake_txt}")
+    else:
+        st.info(f"**{message}**")
+    started = datetime.fromisoformat(job["created_at"]).astimezone(EAT).strftime("%d %b %H:%M")
+    st.markdown(f"#### Last run · {started} · AI cost ${job['cost_usd']:.3f}")
+    tips = sorted((t for t in (db.get_tip(i) for i in job["tip_ids"]) if t), key=lambda t: t.get("slot_number") or 99)
+    for t in tips:
+        tip_card(t)
 
 
 def screenshot_box():
@@ -396,6 +454,7 @@ def screenshot_box():
                 try:
                     rows, unreadable, cost = sr.read_tips([(f.getvalue(), f.type) for f in files],
                                                           datetime.now(EAT).date())
+                    db.record_ai_cost("Screenshot", (cost or {}).get("total_usd"))
                 except Exception as exc:
                     st.error(str(exc))
                     rows = None
@@ -478,89 +537,77 @@ def tip_card(tip, result=None):
                 st.container(height=280).text(tip.get("full_debate_log") or "")
             if not tip.get("published_at") and st.button("🗑️ Delete this pick", key=f"del_{tid}"):
                 db.delete_tip(tid)
-                st.session_state["studio_results"] = [r for r in st.session_state.get("studio_results") or []
-                                                      if r.get("tip_id") != tid]
                 st.rerun()
-
-
-def run_debates(entries, notes, match_date):
-    """Brief + Grok + Claude for each tip (2 tips at a time), then one challenge round on the day's best
-    candidate. Every tip is saved - skipped, failed or not - so the tipster's record stays complete."""
-    default_date = match_date.isoformat() if match_date else None
-    progress = st.progress(0.0, text=f"Analysing {len(entries)} tip(s) - this takes a few minutes...")
-    done_entries = []
-    with ThreadPoolExecutor(max_workers=DEBATE_WORKERS) as pool:
-        futures = {pool.submit(ve.analyze_tip, e["line"], notes, default_date): e for e in entries}
-        for done, fut in enumerate(as_completed(futures), 1):
-            e = {**futures[fut]}
-            try:
-                e["result"] = fut.result()
-                e["cost"] = e["result"].get("cost")
-                print(f"[DeBet cost] {e['line']}: {format_cost(e['cost'])}", flush=True)
-            except Exception as exc:
-                e["error"], e["cost"] = str(exc), getattr(exc, "debate_cost", None)
-                print(f"[DeBet] #{e['slot_number']} {e['line']} FAILED: {exc}", flush=True)
-            done_entries.append(e)
-            progress.progress(done / len(entries), text=f"Done {done}/{len(entries)}: {e['line']}")
-
-    progress.progress(1.0, text="Checking the best candidate...")
-    results = [e.get("result") for e in done_entries]
-    try:
-        _, message, day_cost = ve.choose_best(results)
-    except Exception as exc:  # never lose the analyses because the last step failed
-        message, day_cost = f"No bet today - the challenge round failed ({exc}).", None
-    progress.empty()
-
-    for e in done_entries:
-        tip = parse_tip(e["line"])
-        db.delete_failed_duplicates(tip["match_name"], tip["market"])
-        try:
-            if e.get("result"):
-                fields = ve.tip_fields(e["result"], e["group"], e["slot_number"], default_date)
-            else:
-                fields = {"match_name": tip["match_name"], "user_proposed_tip": tip["market"], "odds": tip["odds"],
-                          "tip_group": e["group"], "slot_number": e["slot_number"], "match_date": default_date,
-                          "full_debate_log": f"Analysis failed: {e['error']}"}
-            e["tip_id"] = db.save_tip(**fields)["id"]
-        except Exception as exc:
-            e.update(tip_id=None, error=f"Saving failed: {exc}")
-    st.session_state["studio_results"] = done_entries
-    st.session_state["day_decision"] = message
-    st.session_state["day_cost"] = day_cost
 
 
 # ---------------------------------------------------------------------------
 # 3. My bets (real money)
 # ---------------------------------------------------------------------------
+def bankroll_box(user):
+    start, pct = db.bankroll_settings()
+    bank = db.current_bankroll(user["id"])
+    stake = db.suggested_stake(user["id"])
+    title = (f"💼 Bankroll {fmt_money(bank)} · suggested stake {fmt_money(stake)} ({pct:g}%)" if bank
+             else "💼 Set your bankroll to get a suggested stake")
+    with st.expander(title, expanded=not start):
+        st.caption("Bet the same small share of your bankroll every time - never more after a loss. "
+                   "Your bankroll updates automatically as your logged bets settle.")
+        with st.form("bankroll"):
+            c = st.columns(2)
+            new_start = c[0].number_input("Starting bankroll", min_value=0.0, value=float(start), step=10000.0,
+                                          format="%.0f")
+            new_pct = c[1].number_input("Stake per bet (% of bankroll)", min_value=0.5, max_value=10.0,
+                                        value=float(pct), step=0.5, format="%.1f",
+                                        help="1-2% is the usual safe range.")
+            if st.form_submit_button("Save"):
+                try:
+                    db.save_bankroll_settings(new_start, new_pct)
+                except ValueError as exc:
+                    st.error(str(exc))
+                else:
+                    st.rerun()
+    return stake
+
+
 def bets_tab(user):
+    suggested = bankroll_box(user)
     with st.container(border=True):
         st.markdown("#### 📝 Log a bet I placed")
         options = db.bettable_selections()
         if not options:
-            st.caption("No upcoming picks with odds. Analyse picks first (AI alternatives need their real odds).")
+            st.caption("No upcoming picks with odds. Analyse picks first.")
         else:
             keys = {f"{o['tip']['id']}:{o['use']}": o for o in options}
 
             def label(k):
                 o = keys[k]
-                tag = "🤖 " if o["use"] == "alternative" else ""
-                return f"{fmt_date(o['tip']['match_date'])} · {o['tip']['match_name']} — {tag}{o['market']} @ {o['odds']:.2f}"
+                star = "⭐ " if o["tip"].get("decision") == "BEST" else ""
+                return f"{star}{fmt_date(o['tip']['match_date'])} · {o['tip']['match_name']} — {o['market']} @ {o['odds']:.2f}"
 
             nonce = st.session_state.get("slip_nonce", 0)
             left, right = st.columns([3, 1])
             picked = left.multiselect("Selections (1 = single, up to 4 = accumulator)", list(keys),
                                       format_func=label, max_selections=4, key=f"slip_pick_{nonce}")
-            stake = right.number_input("Stake", min_value=0.0, value=0.0, step=1000.0, format="%.0f",
-                                       key=f"slip_stake_{nonce}")
+            stake = right.number_input("Stake", min_value=0.0, value=float(suggested or 0), step=500.0,
+                                       format="%.0f", key=f"slip_stake_{nonce}",
+                                       help="Pre-filled with your suggested stake." if suggested else None)
+            taken = {}
+            if picked:
+                st.caption("Odds you actually got from your bookmaker (change them if different):")
+                for k in picked:
+                    o = keys[k]
+                    taken[k] = st.number_input(f"{o['tip']['match_name']} — {o['market']}", min_value=1.01,
+                                               max_value=1000.0, value=float(o["odds"]), step=0.01, format="%.2f",
+                                               key=f"slip_odds_{nonce}_{k}")
             total = 1.0
             for k in picked:
-                total *= keys[k]["odds"]
+                total *= taken.get(k) or keys[k]["odds"]
             if picked:
                 st.caption(f"{db.BET_TYPES[len(picked)]} · total odds {total:.2f}"
                            + (f" · returns {fmt_money(stake * total)} if it wins" if stake > 0 else ""))
             if st.button("💾 Save bet", type="primary", disabled=not picked or stake <= 0, key=f"slip_save_{nonce}"):
                 try:
-                    bet = db.place_personal_bet(user["id"], [k.split(":") for k in picked], stake)
+                    bet = db.place_personal_bet(user["id"], [(*k.split(":"), taken.get(k)) for k in picked], stake)
                 except ValueError as exc:
                     st.error(str(exc))
                 else:
@@ -622,23 +669,28 @@ def results_tab():
         for err in summary["errors"]:
             st.warning(f"{err['match']}: {err['error']}")
 
-    st.markdown("#### ✏️ Correct a result")
+    st.markdown("#### ✏️ Results & closing odds")
+    st.caption("**Closing odds** = the price for the same tip just before kickoff. Getting better odds than the "
+               "closing price, again and again, is the earliest sign of a real edge.")
     flt = st.radio("Show", ["PENDING", "WON", "LOST", "VOID", "All"], horizontal=True, label_visibility="collapsed")
     tips = db.list_tips(result=None if flt == "All" else flt, limit=60)
     if not tips:
         st.info("Nothing here.")
     for t in tips:
         with st.form(f"ovr_{t['id']}"):
-            c = st.columns([4, 2, 2, 1.5, 1], vertical_alignment="bottom")
+            c = st.columns([4, 2, 1.6, 1.6, 1], vertical_alignment="bottom")
+            clv = (f" · vs close **{t['odds'] / t['closing_odds'] - 1:+.0%}**"
+                   if t.get("closing_odds") and t.get("odds") else "")
             c[0].markdown(f"**{t['match_name']}** · {fmt_date(t['match_date'])}  \n"
-                          f"🎯 {t['user_proposed_tip']} @ {fmt_odds(t['odds'])}"
-                          + (f"  \n🤖 {t['alt_market']}" if t.get("alt_market") else ""))
-            res = c[1].selectbox("My pick", db.RESULTS, index=db.RESULTS.index(t["result"]), key=f"res_{t['id']}")
-            alt_res = c[2].selectbox("AI alternative", db.RESULTS, index=db.RESULTS.index(t["alt_result"]),
-                                     key=f"alt_{t['id']}", disabled=not t.get("alt_market"))
-            score = c[3].text_input("Score", t["final_score"], placeholder="2-1", key=f"sc_{t['id']}")
+                          f"🎯 {t['user_proposed_tip']} @ {fmt_odds(t['odds'])}{clv}")
+            res = c[1].selectbox("Result", db.RESULTS, index=db.RESULTS.index(t["result"]), key=f"res_{t['id']}")
+            score = c[2].text_input("Score", t["final_score"], placeholder="2-1", key=f"sc_{t['id']}")
+            closing = c[3].number_input("Closing odds", min_value=1.01, max_value=1000.0, value=t.get("closing_odds"),
+                                        step=0.01, format="%.2f", placeholder="at kickoff", key=f"co_{t['id']}")
             if c[4].form_submit_button("Save"):
-                db.update_tip_result(t["id"], res, score.strip(), alt_res if t.get("alt_market") else None)
+                db.update_tip_result(t["id"], res, score.strip())
+                if closing != t.get("closing_odds"):
+                    db.set_closing_odds(t["id"], closing)
                 st.toast("Saved")
                 st.rerun()
 
@@ -654,7 +706,7 @@ def main():
         login_page()
         return
 
-    head, menu = st.columns([5, 1], vertical_alignment="center")
+    head, menu = st.container(key="topbar").columns([5, 1], vertical_alignment="center")
     head.markdown('<div class="db-brand">DE<span>BET</span></div>', unsafe_allow_html=True)
     with menu.popover("⚙️", width="stretch"):
         with st.form("pw", clear_on_submit=True):
@@ -669,6 +721,15 @@ def main():
                     db.change_password(user["id"], p1)
                     start_session(user["id"])
                     st.success("Changed. Other devices are logged out.")
+        st.markdown("**Backup**")
+        if st.button("📦 Prepare backup", width="stretch",
+                     help="All tips, bets, settings and AI costs as spreadsheet (CSV) files in one .zip."):
+            st.session_state["backup_zip"] = db.export_backup_zip()
+        if st.session_state.get("backup_zip"):
+            st.download_button("⬇️ Download backup", st.session_state["backup_zip"],
+                               file_name=f"debet-backup-{datetime.now(EAT):%Y-%m-%d}.zip", mime="application/zip",
+                               width="stretch", on_click="ignore")
+        st.divider()
         if st.button("Log out", width="stretch"):
             logout()
 
