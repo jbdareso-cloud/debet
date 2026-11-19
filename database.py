@@ -123,7 +123,7 @@ def is_unique_violation(exc):
 # --- Postgres (Supabase) support ---------------------------------------------------------------
 _PG_LOCAL = threading.local()
 _PG_IDLE_PING = 60          # seconds; re-check a connection that has been idle longer than this
-_PG_RETURNING_ID = ("users", "tips", "user_bets")
+_PG_RETURNING_ID = ("users", "tips", "user_bets", "jobs")
 
 
 def _pg_sql(sql):
@@ -393,6 +393,8 @@ _TIP_COLUMNS_V2 = (
     ("probs_json", "TEXT"),          # both models' full market estimates, reasons and missing info
     ("challenge_note", "TEXT"),      # result of the challenge round on the day's best candidate
     ("decision", "TEXT"),            # BEST / VALUE / NO VALUE / SPLIT / SHORT PRICE / NO ODDS
+    ("closing_odds", "REAL"),        # the tip's market price at kickoff (entered by you), for closing-line value
+    ("ai_cost", "REAL"),             # what analysing this tip cost in USD
 )
 
 # Group A slots carry the tipster's 4 tips, Group B slots the user's own picks.
@@ -416,7 +418,27 @@ CREATE TABLE IF NOT EXISTS login_failures (
     at     TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_login_failures ON login_failures (ident, at);
+CREATE TABLE IF NOT EXISTS jobs (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at  TEXT NOT NULL,
+    status      TEXT NOT NULL,                -- running / done / failed
+    total       INTEGER NOT NULL,
+    done        INTEGER NOT NULL DEFAULT 0,
+    message     TEXT,
+    tip_ids     TEXT NOT NULL DEFAULT '[]',
+    cost_usd    REAL NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS ai_costs (
+    at     TEXT NOT NULL,
+    label  TEXT NOT NULL,
+    usd    REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_ai_costs_at ON ai_costs (at);
 """
+
+JOB_STALE_MINUTES = 20      # a "running" analysis older than this was interrupted (e.g. the server restarted)
+DUPLICATE_DAYS = 3          # the same match + market analysed within this many days counts as a duplicate
+DEFAULT_STAKE_PCT = 2.0
 
 LOGIN_MAX_FAILURES = 5      # wrong passwords allowed per login name...
 LOGIN_LOCK_MINUTES = 15     # ...within this window, before that login is locked for the same time
@@ -677,51 +699,6 @@ def delete_session(token):
             conn.execute("DELETE FROM sessions WHERE token_hash = ?", (_token_hash(token),))
 
 
-def allowed_tip_tiers(subscription_tier):
-    """Tip tiers a subscription unlocks. Higher paid tiers include the lower ones."""
-    if subscription_tier == TRIAL_TIER:
-        return list(PAID_TIERS)
-    if subscription_tier in PAID_TIERS:
-        return list(PAID_TIERS[: PAID_TIERS.index(subscription_tier) + 1])
-    return []
-
-
-def get_user_access(user_id):
-    """Check whether the user's trial or paid tier is active.
-
-    Returns a dict: user_id, role, tier, is_active, expires_at, days_remaining,
-    allowed_tiers. Lapsed subscriptions are marked 'Expired' in the database.
-    Returns None if the user doesn't exist.
-    """
-    user = get_user(user_id)
-    if not user:
-        return None
-    if user["role"] == "admin":
-        return {"user_id": user_id, "role": "admin", "tier": user["subscription_tier"],
-                "is_active": True, "expires_at": None, "days_remaining": None,
-                "allowed_tiers": list(PAID_TIERS)}
-
-    tier = user["subscription_tier"]
-    expiry = _parse(user["subscription_expiry"])
-    now = _now()
-    is_active = tier != EXPIRED_TIER and expiry is not None and expiry > now
-
-    if not is_active and tier != EXPIRED_TIER:
-        with get_connection() as conn:
-            conn.execute("UPDATE users SET subscription_tier = ? WHERE id = ?", (EXPIRED_TIER, user_id))
-        tier = EXPIRED_TIER
-
-    return {
-        "user_id": user_id,
-        "role": user["role"],
-        "tier": tier,
-        "is_active": is_active,
-        "expires_at": user["subscription_expiry"],
-        "days_remaining": max(0, (expiry - now).days) if is_active else 0,
-        "allowed_tiers": allowed_tip_tiers(tier) if is_active else [],
-    }
-
-
 # --- Admin user management -------------------------------------------------
 def list_users(role=None):
     query = f"SELECT {_PUBLIC_USER_COLS} FROM users"
@@ -731,38 +708,6 @@ def list_users(role=None):
         params = (role,)
     with get_connection() as conn:
         return [dict(r) for r in conn.execute(query + " ORDER BY created_at DESC, id DESC", params)]
-
-
-def set_user_tier(user_id, tier, days=SUBSCRIPTION_DAYS, extend=True):
-    """Set a paid tier for `days` days.
-
-    With extend=True and an unexpired subscription, the days are added on top of
-    the current expiry; otherwise they start from now. Returns the updated user.
-    """
-    if tier not in PAID_TIERS:
-        raise ValueError(f"Tier must be one of {PAID_TIERS}.")
-    user = get_user(user_id)
-    if not user:
-        raise ValueError(f"User {user_id} not found.")
-    now = _now()
-    current_expiry = _parse(user["subscription_expiry"])
-    start = current_expiry if extend and current_expiry and current_expiry > now else now
-    with get_connection() as conn:
-        conn.execute(
-            "UPDATE users SET subscription_tier = ?, subscription_expiry = ? WHERE id = ?",
-            (tier, _iso(start + timedelta(days=days)), user_id),
-        )
-    return get_user(user_id)
-
-
-def expire_user(user_id):
-    """Immediately revoke a user's access."""
-    with get_connection() as conn:
-        cur = conn.execute(
-            "UPDATE users SET subscription_tier = ?, subscription_expiry = ? WHERE id = ?",
-            (EXPIRED_TIER, _iso(_now()), user_id),
-        )
-    return cur.rowcount == 1
 
 
 # ---------------------------------------------------------------------------
@@ -788,18 +733,6 @@ def update_setting(key, value):
         )
 
 
-def get_admin_contacts():
-    return {"ADMIN_WHATSAPP": get_setting("ADMIN_WHATSAPP"), "ADMIN_PHONE": get_setting("ADMIN_PHONE")}
-
-
-def update_admin_contacts(whatsapp=None, phone=None):
-    if whatsapp is not None:
-        update_setting("ADMIN_WHATSAPP", whatsapp)
-    if phone is not None:
-        update_setting("ADMIN_PHONE", phone)
-    return get_admin_contacts()
-
-
 # ---------------------------------------------------------------------------
 # Tips
 # ---------------------------------------------------------------------------
@@ -815,10 +748,8 @@ def save_tip(match_name, user_proposed_tip, match_date=None, competition=None, o
 
     Every submitted tip is saved, including AVOIDs and failed analyses (ai_verdict None), so raw
     performance can be tracked. `user_proposed_tip` is the market (e.g. 'Over 2.5 Goals');
-    `alternative_market` is Claude's full Part B text and `alt_market` its clean market.
-    `alt_fair_odds` is the AI's own price estimate (record only); `alt_odds` is the real bookmaker
-    price, normally entered later by the admin with set_alt_odds().
-    `auto_tier` defaults to recommended_tier(confidence_score, ai_verdict).
+    The alt_*/tier/publish arguments belong to the old subscriber version and are kept only so older
+    rows still load; the app no longer sets them.
     """
     if auto_tier is None:
         auto_tier = recommended_tier(confidence_score, ai_verdict)
@@ -859,7 +790,180 @@ def save_tip(match_name, user_proposed_tip, match_date=None, competition=None, o
 
 
 _VALUE_COLUMNS = {"p_grok", "p_claude", "p_final", "value", "model_gap", "probs_json",
-                  "challenge_note", "decision"}
+                  "challenge_note", "decision", "ai_cost"}
+_UPDATABLE_TIP_COLUMNS = _VALUE_COLUMNS | {"ai_verdict", "full_debate_log", "risk_factor", "edge_summary"}
+
+
+def update_tip_fields(tip_id, **fields):
+    """Update value-engine fields of an existing tip (e.g. after the day's challenge round)."""
+    bad = set(fields) - _UPDATABLE_TIP_COLUMNS
+    if bad:
+        raise ValueError(f"Can't update {sorted(bad)}")
+    if fields:
+        with get_connection() as conn:
+            conn.execute(f"UPDATE tips SET {', '.join(f'{k} = ?' for k in fields)} WHERE id = ?",
+                         (*fields.values(), tip_id))
+    return get_tip(tip_id)
+
+
+def set_closing_odds(tip_id, odds):
+    """Record the tip's market price at kickoff (None clears it)."""
+    if odds is not None:
+        odds = round(float(odds), 2)
+        if not 1.0 < odds <= 1000:
+            raise ValueError("Closing odds must be decimal odds greater than 1.00.")
+    with get_connection() as conn:
+        conn.execute("UPDATE tips SET closing_odds = ? WHERE id = ?", (odds, tip_id))
+
+
+def find_duplicates(pairs, days=DUPLICATE_DAYS):
+    """pairs: [(match_name, market)]. Returns the set of (match, market) (lower-cased) already analysed
+    in the last `days` days (failed analyses don't count)."""
+    since = _iso(_now() - timedelta(days=days))
+    with get_connection() as conn:
+        rows = conn.execute("SELECT match_name, user_proposed_tip FROM tips WHERE created_at >= ? "
+                            "AND ai_verdict IS NOT NULL", (since,)).fetchall()
+    seen = {(r["match_name"].strip().lower(), r["user_proposed_tip"].strip().lower()) for r in rows}
+    return {(m.strip().lower(), k.strip().lower()) for m, k in pairs} & seen
+
+
+# --- Background analysis jobs ---------------------------------------------------------------------
+def create_job(total):
+    with get_connection() as conn:
+        cur = conn.execute("INSERT INTO jobs (created_at, status, total, done, tip_ids, cost_usd) "
+                           "VALUES (?, 'running', ?, 0, '[]', 0)", (_iso(_now()), total))
+        return cur.lastrowid
+
+
+def update_job(job_id, **fields):
+    allowed = {"status", "done", "message", "tip_ids", "cost_usd"}
+    fields = {k: (json.dumps(v) if k == "tip_ids" else v) for k, v in fields.items() if k in allowed}
+    with get_connection() as conn:
+        conn.execute(f"UPDATE jobs SET {', '.join(f'{k} = ?' for k in fields)} WHERE id = ?",
+                     (*fields.values(), job_id))
+
+
+def _job(row):
+    if not row:
+        return None
+    job = dict(row)
+    job["tip_ids"] = json.loads(job.get("tip_ids") or "[]")
+    if job["status"] == "running" and _now() - _parse(job["created_at"]) > timedelta(minutes=JOB_STALE_MINUTES):
+        job["status"] = "interrupted"
+    return job
+
+
+def get_job(job_id):
+    with get_connection() as conn:
+        return _job(conn.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone())
+
+
+def latest_job(hours=24):
+    """The most recent analysis run started in the last `hours` hours, or None."""
+    since = _iso(_now() - timedelta(hours=hours))
+    with get_connection() as conn:
+        return _job(conn.execute("SELECT * FROM jobs WHERE created_at >= ? ORDER BY id DESC LIMIT 1",
+                                 (since,)).fetchone())
+
+
+# --- AI spend ------------------------------------------------------------------------------------
+def record_ai_cost(label, usd):
+    if usd:
+        with get_connection() as conn:
+            conn.execute("INSERT INTO ai_costs (at, label, usd) VALUES (?, ?, ?)", (_iso(_now()), label, float(usd)))
+
+
+def ai_spend(days=None, since_month_start=False):
+    """Total AI spend in USD: this calendar month (UTC) or the last `days` days."""
+    now = _now()
+    since = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0) if since_month_start \
+        else now - timedelta(days=days or 30)
+    with get_connection() as conn:
+        row = conn.execute("SELECT COALESCE(SUM(usd), 0) AS total, COUNT(*) AS n FROM ai_costs WHERE at >= ?",
+                           (_iso(since),)).fetchone()
+    return round(float(row["total"] or 0), 4), row["n"]
+
+
+# --- Bankroll & stakes -----------------------------------------------------------------------------
+def bankroll_settings():
+    try:
+        start = float(get_setting("BANKROLL_START") or 0)
+    except ValueError:
+        start = 0.0
+    try:
+        pct = float(get_setting("STAKE_PCT") or DEFAULT_STAKE_PCT)
+    except ValueError:
+        pct = DEFAULT_STAKE_PCT
+    return start, pct
+
+
+def save_bankroll_settings(start, pct):
+    if start < 0 or not 0.1 <= pct <= 10:
+        raise ValueError("Bankroll must be 0 or more and the stake between 0.1% and 10%.")
+    update_setting("BANKROLL_START", round(float(start), 2))
+    update_setting("STAKE_PCT", round(float(pct), 2))
+
+
+def current_bankroll(user_id):
+    """Starting bankroll plus all settled profit/loss from logged bets (None if no bankroll set)."""
+    start, _ = bankroll_settings()
+    if not start:
+        return None
+    with get_connection() as conn:
+        row = conn.execute("SELECT COALESCE(SUM(net_profit), 0) AS net FROM user_bets WHERE user_id = ? "
+                           "AND status != 'PENDING'", (user_id,)).fetchone()
+    return round(start + float(row["net"] or 0), 2)
+
+
+def suggested_stake(user_id):
+    """Flat stake = STAKE_PCT of the current bankroll, rounded to the nearest 500. None without a bankroll."""
+    bank = current_bankroll(user_id)
+    if not bank or bank <= 0:
+        return None
+    _, pct = bankroll_settings()
+    return max(500, int(round(bank * pct / 100 / 500.0)) * 500)
+
+
+# --- Closing-line value ------------------------------------------------------------------------------
+def get_clv_stats(user_id, days=PERFORMANCE_WINDOW_DAYS):
+    """Average 'price vs kickoff price' (odds / closing_odds - 1) for tips and for your logged bet legs.
+    Positive means you got better odds than the market closed at - the best early sign of a real edge."""
+    since = _iso(_now() - timedelta(days=days))
+    with get_connection() as conn:
+        tips = {r["id"]: dict(r) for r in conn.execute(
+            "SELECT id, odds, closing_odds, tip_group FROM tips WHERE closing_odds IS NOT NULL AND created_at >= ?",
+            (since,))}
+        bets = [dict(r) for r in conn.execute("SELECT legs FROM user_bets WHERE user_id = ? AND created_at >= ?",
+                                              (user_id, since))]
+
+    def avg(values):
+        return (round(100 * sum(values) / len(values), 1), len(values)) if values else (None, 0)
+
+    tipster = [t["odds"] / t["closing_odds"] - 1 for t in tips.values() if t["odds"] and t["tip_group"] == TIP_GROUPS[0]]
+    mine_tips = [t["odds"] / t["closing_odds"] - 1 for t in tips.values() if t["odds"] and t["tip_group"] == TIP_GROUPS[1]]
+    legs = [leg["odds"] / tips[leg["tip_id"]]["closing_odds"] - 1
+            for b in bets for leg in json.loads(b["legs"] or "[]") if leg.get("tip_id") in tips]
+    return {"tipster": avg(tipster), "mine": avg(mine_tips), "my_bets": avg(legs)}
+
+
+# --- Backup ------------------------------------------------------------------------------------------
+def export_backup_zip():
+    """A .zip (bytes) with tips, bets, settings and AI costs as CSV files. Passwords are not included."""
+    import csv
+    import io
+    import zipfile
+    buf = io.BytesIO()
+    with get_connection() as conn, zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for table in ("tips", "user_bets", "settings", "ai_costs", "jobs"):
+            rows = [dict(r) for r in conn.execute(f"SELECT * FROM {table}")]
+            text = io.StringIO()
+            if rows:
+                writer = csv.DictWriter(text, fieldnames=list(rows[0]))
+                writer.writeheader()
+                writer.writerows(rows)
+            zf.writestr(f"{table}.csv", text.getvalue())
+        zf.writestr("README.txt", f"DeBet backup made {_iso(_now())} UTC.\nOpen the CSV files in Excel or Google Sheets.\n")
+    return buf.getvalue()
 
 
 def get_model_accuracy(days=None):
@@ -908,139 +1012,7 @@ def list_tips(result=None, published=None, limit=None):
         return [dict(r) for r in conn.execute(query, params)]
 
 
-def list_tips_by_group(published=None):
-    """{group: [tips]} for the admin studio: Group A then Group B (then ungrouped under None), each
-    sorted ASCENDING by slot_number (1-4 / 5-7); tips without a slot go after, oldest first."""
-    clauses, params = [], []
-    if published is not None:
-        clauses.append("is_published = ?")
-        params.append(int(bool(published)))
-    query = "SELECT * FROM tips" + (" WHERE " + " AND ".join(clauses) if clauses else "")
-    query += " ORDER BY slot_number IS NULL, slot_number ASC, created_at ASC, id ASC"
-    with get_connection() as conn:
-        rows = [dict(r) for r in conn.execute(query, params)]
-    out = {group: [] for group in TIP_GROUPS}
-    out[None] = []
-    for row in rows:
-        out[row["tip_group"] if row["tip_group"] in out else None].append(row)
-    return out
-
-
-def is_locked(tip, now=None):
-    """True once a tip has been live longer than the grace period: its tier, market and publish
-    status can no longer change and it can't be deleted (keeps the track record honest)."""
-    published_at = _parse(tip.get("published_at"))
-    if not published_at:
-        return False
-    return (now or _now()) - published_at > timedelta(minutes=PUBLISH_GRACE_MINUTES)
-
-
 APP_TZ = timezone(timedelta(hours=3), "EAT")  # Uganda: the calendar day the admin and subscribers live in
-
-
-def _match_day_passed(match_date, today=None):
-    """True if the match date is before today in East Africa Time. Undated tips are not blocked."""
-    try:
-        return datetime.fromisoformat(str(match_date)[:10]).date() < (today or _now().astimezone(APP_TZ).date())
-    except ValueError:
-        return False
-
-
-def assign_tip(tip_id, tier, is_published=True, final_tip_used=None):
-    """Set a tip's tier, publish status and (optionally) which market goes out.
-
-    Publishing requires a paid tier, a market that is still PENDING and a match date that isn't in
-    the past. final_tip_used='alternative' publishes the AI's Part B market instead of the original
-    one (requires a stored alt_market and its real bookmaker odds). Within PUBLISH_GRACE_MINUTES of
-    first publishing, the tip can still be changed or unpublished; after that it is locked.
-    """
-    if tier not in TIP_TIERS:
-        raise ValueError(f"Tier must be one of {TIP_TIERS}.")
-    if is_published and tier == "Unassigned":
-        raise ValueError("Assign a tier before publishing.")
-    if final_tip_used is not None and final_tip_used not in FINAL_TIP_CHOICES:
-        raise ValueError(f"final_tip_used must be one of {FINAL_TIP_CHOICES}.")
-    tip = get_tip(tip_id)
-    if not tip:
-        raise ValueError(f"Tip {tip_id} not found.")
-    use = final_tip_used or tip["final_tip_used"]
-    if is_locked(tip):
-        unchanged = (bool(is_published) == bool(tip["is_published"]) and tier == tip["tier"]
-                     and use == tip["final_tip_used"])
-        if unchanged:
-            return tip
-        raise ValueError(f"{tip['match_name']} has been live for more than {PUBLISH_GRACE_MINUTES} minutes - "
-                         "it's locked so the track record can't be changed.")
-    if is_published:
-        if use == "alternative":
-            if not tip["alt_market"]:
-                raise ValueError("This tip has no AI alternative market to publish.")
-            if not tip["alt_odds"] or tip["alt_odds"] <= 1:
-                raise ValueError(f"Enter the real bookmaker odds for '{tip['alt_market']}' before publishing it.")
-        result = tip["alt_result"] if use == "alternative" else tip["result"]
-        if result != "PENDING":
-            raise ValueError(f"{tip['match_name']} is already settled ({result}) - only upcoming matches can be published.")
-        if _match_day_passed(tip["match_date"]):
-            raise ValueError(f"{tip['match_name']} was on {tip['match_date']} - past matches can't be published.")
-    published_at = (tip["published_at"] or _iso(_now())) if is_published else None
-    with get_connection() as conn:
-        conn.execute("UPDATE tips SET tier = ?, is_published = ?, final_tip_used = ?, published_at = ? "
-                     "WHERE id = ?", (tier, int(bool(is_published)), use, published_at, tip_id))
-    return get_tip(tip_id)
-
-
-def set_alt_odds(tip_id, odds):
-    """Record the real bookmaker price for a tip's AI alternative market. Allowed while that market is
-    unsettled and the tip isn't locked, so a price can't be filled in after the result is known."""
-    try:
-        odds = round(float(odds), 2)
-    except (TypeError, ValueError):
-        raise ValueError("Enter the odds as a decimal number, e.g. 1.85.") from None
-    if not 1.0 < odds <= 1000:
-        raise ValueError("Odds must be decimal odds greater than 1.00.")
-    tip = get_tip(tip_id)
-    if not tip or not tip["alt_market"]:
-        raise ValueError("This tip has no AI alternative market.")
-    if tip["alt_result"] != "PENDING":
-        raise ValueError("This alternative is already settled - its odds can't be changed now.")
-    if is_locked(tip) and tip["alt_odds"]:
-        raise ValueError("This tip is locked - its odds can't be changed.")
-    with get_connection() as conn:
-        conn.execute("UPDATE tips SET alt_odds = ? WHERE id = ?", (odds, tip_id))
-    return get_tip(tip_id)
-
-
-def published_pick(tip):
-    """The market, odds and result a published tip actually went out with."""
-    if tip.get("final_tip_used") == "alternative" and tip.get("alt_market"):
-        return {"market": tip["alt_market"], "odds": tip.get("alt_odds"), "result": tip["alt_result"],
-                "is_alternative": True}
-    return {"market": tip["user_proposed_tip"], "odds": tip.get("odds"), "result": tip["result"],
-            "is_alternative": False}
-
-
-def get_published_tips(tiers, result=None):
-    """Published tips in the given tier(s), newest match first. `tiers` may be a str or list.
-
-    `result` filters on the result of the market that was actually published.
-    """
-    tiers = [tiers] if isinstance(tiers, str) else list(tiers)
-    if not tiers:
-        return []
-    query = f"SELECT * FROM tips WHERE is_published = 1 AND tier IN ({','.join('?' * len(tiers))})"
-    params = list(tiers)
-    if result:
-        query += f" AND {_EFFECTIVE_RESULT} = ?"
-        params.append(result)
-    query += " ORDER BY match_date DESC, id DESC"
-    with get_connection() as conn:
-        return [dict(r) for r in conn.execute(query, params)]
-
-
-def get_tips_for_user(user_id):
-    """Published tips the user's current access unlocks."""
-    access = get_user_access(user_id)
-    return get_published_tips(access["allowed_tiers"]) if access and access["is_active"] else []
 
 
 def update_tip_result(tip_id, result, final_score="", alt_result=None):
@@ -1090,42 +1062,6 @@ def delete_failed_duplicates(match_name, market):
 
 
 # --- Statistics --------------------------------------------------------------
-def _stats(conn, where="", params=()):
-    r = _EFFECTIVE_RESULT
-    row = conn.execute(
-        f"""SELECT COUNT(*) AS total,
-                   SUM(CASE WHEN {r} = 'WON' THEN 1 ELSE 0 END)     AS won,
-                   SUM(CASE WHEN {r} = 'LOST' THEN 1 ELSE 0 END)    AS lost,
-                   SUM(CASE WHEN {r} = 'VOID' THEN 1 ELSE 0 END)    AS void,
-                   SUM(CASE WHEN {r} = 'PENDING' THEN 1 ELSE 0 END) AS pending
-            FROM tips WHERE is_published = 1 {where}""",
-        params,
-    ).fetchone()
-    won, lost = row["won"] or 0, row["lost"] or 0
-    settled = won + lost
-    return {
-        "total": row["total"],
-        "won": won,
-        "lost": lost,
-        "void": row["void"] or 0,
-        "pending": row["pending"] or 0,
-        "settled": settled,
-        "win_rate": round(100.0 * won / settled, 1) if settled else 0.0,
-    }
-
-
-def get_win_rate_stats():
-    """Win rate (WON / (WON + LOST), VOID and PENDING excluded) for published tips.
-
-    Returns {"overall": {...}, "Silver": {...}, "Gold": {...}, "Platinum VVIP": {...}}.
-    """
-    with get_connection() as conn:
-        stats = {"overall": _stats(conn)}
-        for tier in PAID_TIERS:
-            stats[tier] = _stats(conn, "AND tier = ?", (tier,))
-    return stats
-
-
 # --- 30-day Performance Comparison Lab (admin only) ---------------------------------
 PERFORMANCE_CATEGORIES = (
     ("group_a", "Tipster - all tips"),
@@ -1189,58 +1125,6 @@ def _money(value):
     return round(float(value), 2)
 
 
-def place_user_bet(user_id, tip_ids, stake_amount):
-    """Log a real bet slip of 1-4 published, still-pending tips. Returns the saved slip dict.
-
-    Each leg is priced at the market the tip is published with (original or AI alternative).
-    Raises ValueError on anything invalid (tier not unlocked, settled tip, same match twice...).
-    """
-    ids = list(dict.fromkeys(int(t) for t in (tip_ids or [])))
-    if not 1 <= len(ids) <= MAX_SLIP_LEGS:
-        raise ValueError(f"Pick between 1 and {MAX_SLIP_LEGS} selections.")
-    try:
-        stake = _money(stake_amount)
-    except (TypeError, ValueError):
-        raise ValueError("Enter your stake as a number.") from None
-    if stake <= 0:
-        raise ValueError("Stake must be greater than 0.")
-    access = get_user_access(user_id)
-    if not access or not access["is_active"]:
-        raise ValueError("Your access has expired - renew your plan to log new slips.")
-
-    legs, matches = [], set()
-    for tid in ids:
-        tip = get_tip(tid)
-        if not tip or not tip["is_published"] or tip["tier"] not in access["allowed_tiers"]:
-            raise ValueError(f"Selection #{tid} isn't available on your plan.")
-        pick = published_pick(tip)
-        if pick["result"] != "PENDING":
-            raise ValueError(f"{tip['match_name']} is already settled - pick an upcoming match.")
-        if not pick["odds"] or pick["odds"] <= 1:
-            raise ValueError(f"{tip['match_name']} has no odds to price the slip with.")
-        key = tip["match_name"].strip().lower()
-        if key in matches:
-            raise ValueError(f"{tip['match_name']} appears twice - one selection per match.")
-        matches.add(key)
-        legs.append({"tip_id": tid, "use": "alternative" if pick["is_alternative"] else "original",
-                     "match": tip["match_name"], "market": pick["market"], "odds": round(float(pick["odds"]), 2)})
-
-    total_odds = 1.0
-    for leg in legs:
-        total_odds *= leg["odds"]
-    total_odds = round(total_odds, 2)
-    summary = " + ".join(f"{l['match']}: {l['market']} @ {l['odds']:.2f}" for l in legs)
-    with get_connection() as conn:
-        cur = conn.execute(
-            """INSERT INTO user_bets (user_id, created_at, bet_type, tip_ids, legs, selections_summary,
-                                      total_odds, stake_amount, potential_payout, status, net_profit)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'PENDING', NULL)""",
-            (user_id, _iso(_now()), BET_TYPES[len(legs)], json.dumps(ids), json.dumps(legs), summary,
-             total_odds, stake, _money(stake * total_odds)))
-        bet_id = cur.lastrowid
-    return get_user_bet(bet_id)
-
-
 def bettable_selections(days=14):
     """Personal mode: every unsettled market you could still bet on, from tips saved in the last `days`
     days - your original market (if it has odds) and the AI alternative (once its real odds are entered).
@@ -1260,9 +1144,17 @@ def bettable_selections(days=14):
 
 
 def place_personal_bet(user_id, selections, stake_amount):
-    """Personal mode: log a real slip of 1-4 legs, each (tip_id, "original"|"alternative").
-    No publishing or tier needed. Returns the saved slip dict; raises ValueError if invalid."""
-    sel = list(dict.fromkeys((int(t), u) for t, u in (selections or [])))
+    """Personal mode: log a real slip of 1-4 legs, each (tip_id, "original"|"alternative"[, odds_you_got]).
+    The optional third value is the price your bookmaker actually gave you; without it the tip's listed
+    odds are used. Returns the saved slip dict; raises ValueError if invalid."""
+    taken = {}
+    pairs = []
+    for s in selections or []:
+        tid, use = int(s[0]), s[1]
+        if len(s) > 2 and s[2]:
+            taken[(tid, use)] = float(s[2])
+        pairs.append((tid, use))
+    sel = list(dict.fromkeys(pairs))
     if not 1 <= len(sel) <= MAX_SLIP_LEGS:
         raise ValueError(f"Pick between 1 and {MAX_SLIP_LEGS} selections.")
     try:
@@ -1278,6 +1170,10 @@ def place_personal_bet(user_id, selections, stake_amount):
             raise ValueError(f"Selection #{tid} no longer exists.")
         alt = use == "alternative"
         market, odds = (tip["alt_market"], tip["alt_odds"]) if alt else (tip["user_proposed_tip"], tip["odds"])
+        if (tid, use) in taken:
+            odds = taken[(tid, use)]
+            if not 1.0 < odds <= 1000:
+                raise ValueError(f"{tip['match_name']}: odds must be greater than 1.00.")
         result = tip["alt_result"] if alt else tip["result"]
         if not market or result != "PENDING":
             raise ValueError(f"{tip['match_name']} is already settled - pick an upcoming match.")
