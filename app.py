@@ -706,7 +706,8 @@ def results_tab():
             st.session_state["last_verification"] = rv.verify_pending_tips(force=True)
         st.rerun()
     c[1].caption(f"Last check: {last.strftime('%d %b %H:%M UTC') if last else 'never'}. "
-                 "Also runs automatically (at most every 3 hours) when the app starts.")
+                 "Also runs automatically (at most every 3 hours) when the app starts - for yesterday's and "
+                 "older matches only. Press the button to check today's finished games.")
     summary = st.session_state.get("last_verification") or BOOT.get("startup_verification")
     if summary and not summary.get("skipped"):
         st.success(f"Checked {summary['checked']} · settled {len(summary['settled'])} · "
