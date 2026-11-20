@@ -74,7 +74,13 @@ ESTIMATE_SYSTEM = (
     "is the best summary of all public information: START from it and adjust for what the brief shows - "
     "confirmed absences, form, xG, home/away record, motivation, rest. Do not pull numbers toward 50% "
     "just because you are unsure; when the brief adds little, stay close to the market price. Confirmed "
-    "information moves you more than unconfirmed. For markets without a price, use the brief and typical "
+    "information moves you more than unconfirmed. Prices can be wrong, and finding where is the whole "
+    "point. Check actively for these signs of a mispriced selection: (1) a popular or big-name team "
+    "priced too short because the public backs it anyway; (2) an overreaction to the last result or one "
+    "big name missing, when the wider form and xG say otherwise; (3) confirmed late team news - injuries, "
+    "suspensions, rotation - that a price set days earlier may not reflect yet; (4) motivation and "
+    "schedule: nothing to play for, a cup game or derby next, short rest or long travel. A sign only "
+    "counts if the brief supports it. For markets without a price, use the brief and typical "
     "league rates (home ~45%, draw ~26%, away ~29%; Over 2.5 and both-teams-to-score ~50%), and keep "
     "every market consistent with your estimate for the tipped one. Reply with JSON only."
 )
@@ -89,7 +95,7 @@ BRIEF:
 
 Return exactly this JSON (probabilities as decimals between 0 and 1):
 {{"home": 0.00, "draw": 0.00, "away": 0.00, "over15": 0.00, "over25": 0.00, "over35": 0.00, "btts": 0.00,{custom_key}
- "reasons": ["<the 2 facts that moved you most>", "..."],
+ "reasons": ["<price verdict: 'priced too short', 'priced too long' or 'fair price' - and the mispricing sign behind it>", "<the fact that moved you most>"],
  "missing": ["<important information the brief did not have>"]}}
 Rules: home + draw + away = 1. over15 >= over25 >= over35."""
 
@@ -191,7 +197,8 @@ def market_anchor(market_label, odds):
     fair = 1 / odds / BOOKMAKER_MARGIN
     return (f"Tipped selection: {market_label} at odds {odds:.2f} - the market rates it about {fair:.0%} "
             f"after the bookmaker's margin. Start from {fair:.0%} for this market and move it only for "
-            "concrete evidence in the brief, normally within 8 points either way.\n")
+            "concrete evidence in the brief - normally within 8 points either way, up to 15 when confirmed "
+            "team news or a clear mispricing sign justifies it.\n")
 
 
 def _estimate(models, label, match, match_date, brief, extra, custom, usage, anchor=""):
