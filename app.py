@@ -421,27 +421,56 @@ def job_progress(job_id):
             st.caption(f"✓ {t['match_name']} - {t['user_proposed_tip']} · {ai_label(t)}")
 
 
+def top_pick(tips):
+    """DeBet's pick of the day's tips: the one Grok and Claude together give the highest chance of winning,
+    whatever its price. Tips where the models split are only used if nothing else was analysed."""
+    rated = [t for t in tips if t.get("p_final") is not None]
+    agreed = [t for t in rated if t.get("decision") != "SPLIT"] or rated
+    return max(agreed, key=lambda t: (t["p_final"], -(t.get("model_gap") or 0)), default=None)
+
+
+def tip_line(t):
+    return f"{t['match_name']} · **{t['user_proposed_tip']}** @ {fmt_odds(t['odds'])}"
+
+
 def job_summary(job):
-    """Banner + cards for the latest finished analysis run."""
+    """1) DeBet's pick of your tips (likeliest to win)  2) one alternative: the value pick, or a market to check."""
     message = job["message"] or ""
+    tips = sorted((t for t in (db.get_tip(i) for i in job["tip_ids"]) if t), key=lambda t: t.get("slot_number") or 99)
     if job["status"] in ("failed", "interrupted"):
         st.error(message if job["status"] == "failed" else
                  "The last analysis was interrupted (the app restarted). Tips already finished are saved below; "
                  "run the rest again.")
-    elif message.startswith("Best pick"):
+    pick = top_pick(tips) if job["status"] == "done" else None
+    best = next((t for t in tips if t.get("decision") == "BEST"), None)
+    if pick:
+        p, odds = pick["p_final"], pick.get("odds")
+        if odds:
+            v = p * odds - 1
+            price = (f"✅ Good price too: value **{v:+.0%}**." if v >= ve.VALUE_MIN else
+                     f"⚠️ The price is short: value **{v:+.0%}** (fair odds {1 / p:.2f}).")
+        else:
+            price = f"❔ No odds entered - fair odds **{1 / p:.2f}**."
         stake = db.suggested_stake(st.session_state.get("user_id"))
-        stake_txt = f"  \n💰 Suggested stake: **{fmt_money(stake)}** ({db.bankroll_settings()[1]:g}% of your bankroll)" \
-            if stake else "  \n:gray[Set your bankroll in My Bets to see a suggested stake.]"
-        st.success(f"**⭐ {message}**{stake_txt}")
-    else:
-        st.info(f"**{message}**")
-    tips = sorted((t for t in (db.get_tip(i) for i in job["tip_ids"]) if t), key=lambda t: t.get("slot_number") or 99)
-    if job["status"] == "done" and not any(t.get("decision") in ("BEST", "VALUE") for t in tips):
-        pick = one_pick_to_check(tips)
-        if pick:
-            match, label, p, need = pick
-            st.warning(f"🔁 **One pick to check:** {match} · **{label}** ({p:.0%}) - bet only at "
-                       f"**{need:.2f} or higher**. If your bookmaker pays less, there's no bet today.")
+        stake_txt = f"  \n💰 Suggested stake: **{fmt_money(stake)}**" if stake else ""
+        st.success(f"🏆 **DeBet's pick of your {len(tips)} tips:** {tip_line(pick)}  \n"
+                   f"Chance to win **{p:.0%}** (Grok {pick['p_grok']:.0%} · Claude {pick['p_claude']:.0%}) - "
+                   f"the highest of your tips. {price}{stake_txt}")
+    # The one alternative
+    if best and pick and best["id"] == pick["id"]:
+        st.caption("⭐ It's also DeBet's value pick - it passed the challenge round.")
+    elif best:
+        st.info(f"💎 **Alternative - best value:** {tip_line(best)}  \nChance {best['p_final']:.0%} · "
+                f"value **{best['value']:+.0%}** (passed the challenge round). Lower chance than the pick above, "
+                "but a better price.")
+    elif job["status"] == "done" and not best:
+        alt = one_pick_to_check(tips)
+        if alt:
+            match, label, p, need = alt
+            st.info(f"🔁 **Alternative market to check:** {match} · **{label}** ({p:.0%}) - worth it only at "
+                    f"**{need:.2f} or higher**.")
+    if message and job["status"] == "done" and not best:
+        st.caption(f"Value check: {message}")
     started = datetime.fromisoformat(job["created_at"]).astimezone(EAT).strftime("%d %b %H:%M")
     st.markdown(f"#### Last run · {started} · AI cost ${job['cost_usd']:.3f}")
     for t in tips:
