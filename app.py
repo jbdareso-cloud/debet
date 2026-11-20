@@ -496,6 +496,25 @@ def screenshot_box():
             st.rerun()
 
 
+SHORT_MARKET = {"home": "1 Home", "draw": "X Draw", "away": "2 Away", "1x": "1X", "x2": "X2", "12": "12",
+                "over15": "Over 1.5", "over25": "Over 2.5", "over35": "Over 3.5", "under15": "Under 1.5",
+                "under25": "Under 2.5", "under35": "Under 3.5", "btts": "GG", "btts_no": "NG"}
+
+
+def markets_table(probs):
+    """All markets as a plain table that reads well on a phone. The tipped market is marked 👉 and bold."""
+    pct = lambda v: f"{v:.0%}" if v is not None else "—"
+    rows = ["| Market | Grok | Claude | DeBet | Fair |", "|:--|--:|--:|--:|--:|"]
+    for k, p in probs["combined"].items():
+        cells = [SHORT_MARKET.get(k, ve.MARKET_LABELS.get(k, k)), pct(probs["grok"].get(k)), pct(probs["claude"].get(k)),
+                 pct(p), f"{1 / p:.2f}" if p else "—"]
+        if k == probs.get("market_key"):
+            cells = [f"**{c}**" for c in cells]
+            cells[0] = "👉 " + cells[0]
+        rows.append("| " + " | ".join(cells) + " |")
+    return "\n".join(rows)
+
+
 def tip_card(tip, result=None):
     """One tip: its price, what Grok and Claude think, the value and the decision. Details tucked away."""
     tid = tip["id"]
@@ -528,12 +547,8 @@ def tip_card(tip, result=None):
                 if tip.get("probs_json"):
                     probs = json.loads(tip["probs_json"])
                     st.markdown("**All markets** - bet only if your bookmaker pays clearly more than the fair odds:")
-                    pct = lambda v: f"{v:.0%}" if v is not None else "—"
-                    st.dataframe(pd.DataFrame([{
-                        "Market": ("👉 " if k == probs.get("market_key") else "") + ve.MARKET_LABELS.get(k, k),
-                        "Grok": pct(probs["grok"].get(k)), "Claude": pct(probs["claude"].get(k)),
-                        "Combined": pct(p), "Fair odds": f"{1 / p:.2f}" if p else "—"}
-                        for k, p in probs["combined"].items()]), hide_index=True, width="stretch")
+                    st.markdown(markets_table(probs))
+                    st.caption("GG = both teams score · NG = not both teams score · Fair = lowest odds worth taking")
                 st.container(height=280).text(tip.get("full_debate_log") or "")
             if not tip.get("published_at") and st.button("🗑️ Delete this pick", key=f"del_{tid}"):
                 db.delete_tip(tid)
