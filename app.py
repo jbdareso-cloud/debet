@@ -345,8 +345,9 @@ def dashboard(user):
 # ---------------------------------------------------------------------------
 def analyse_tab():
     st.caption("Type one tip per line with its odds, e.g. `Arsenal vs Chelsea over 2.5 1.95`. Grok and Claude each "
-               f"estimate the chances without seeing the odds; DeBet then picks the best value tip (at least "
-               f"+{ve.VALUE_MIN:.0%}) or says **No bet today**. Tips under {ve.MIN_ODDS:.2f} are recorded but not analysed.")
+               "start from the market's price and adjust it for the latest data, separately. DeBet then names "
+               "🏆 the tip most likely to win, plus one alternative: the best value tip (at least "
+               f"+{ve.VALUE_MIN:.0%}) or another market. Tips under {ve.MIN_ODDS:.2f} are recorded but not analysed.")
     if "studio_date" not in st.session_state:
         st.session_state["studio_date"] = datetime.now(EAT).date()
     job = db.latest_job()
