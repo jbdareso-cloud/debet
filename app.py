@@ -429,6 +429,25 @@ def top_pick(tips):
     return max(agreed, key=lambda t: (t["p_final"], -(t.get("model_gap") or 0)), default=None)
 
 
+CLEAR_LEAD = 0.08  # the top tip must be at least 8 points above the next best to count as a clear pick
+
+
+def pick_clarity(tips, pick):
+    """'Clear' when DeBet's pick stands well above the next best tip, 'Close call' when they're similar."""
+    rated = [t for t in tips if t.get("p_final") is not None and t.get("decision") != "SPLIT"
+             and t["id"] != pick["id"]]
+    if not rated:
+        return ""
+    runner = max(rated, key=lambda t: t["p_final"])
+    lead = pick["p_final"] - runner["p_final"]
+    who = f"{runner['match_name']} ({runner['p_final']:.0%})"
+    if lead >= CLEAR_LEAD:
+        return f"  \n🟢 **Clear pick** - {lead * 100:.0f} points ahead of your next best, {who}."
+    return (f"  \n🟡 **Close call** - your next best, {who}, is only {lead * 100:.0f} point"
+            f"{'' if round(lead * 100) == 1 else 's'} behind. DeBet can't clearly separate them: "
+            "consider splitting your stake over the top tips as singles, or skipping today.")
+
+
 def tip_line(t):
     return f"{t['match_name']} · **{t['user_proposed_tip']}** @ {fmt_odds(t['odds'])}"
 
@@ -455,7 +474,7 @@ def job_summary(job):
         stake_txt = f"  \n💰 Suggested stake: **{fmt_money(stake)}**" if stake else ""
         st.success(f"🏆 **DeBet's pick of your {len(tips)} tips:** {tip_line(pick)}  \n"
                    f"Chance to win **{p:.0%}** (Grok {pick['p_grok']:.0%} · Claude {pick['p_claude']:.0%}) - "
-                   f"the highest of your tips. {price}{stake_txt}")
+                   f"the highest of your tips. {price}{pick_clarity(tips, pick)}{stake_txt}")
     # The one alternative
     if best and pick and best["id"] == pick["id"]:
         st.caption("⭐ It's also DeBet's value pick - it passed the challenge round.")
