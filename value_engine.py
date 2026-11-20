@@ -2,14 +2,16 @@
 
 Per match:
   Step 0  Sonar     - sourced fact brief (the only web search)
-  Step 1  Grok      - probabilities for a fixed set of markets, from the brief only
+  Step 1  Grok      - probabilities for a fixed set of markets, starting from the tipped selection's
+                      market price (margin removed) and adjusting for the brief
   Step 2  Claude    - the same task, completely independent of Grok
   Code              - combine, measure disagreement, value = probability x odds - 1
 Per batch (one day's picks):
   Step 3  Claude    - challenge round on the single best candidate only (may lower, never raise)
   Code              - Best pick of the day, or "No bet today"
 
-Neither model ever sees the tip, the odds or the other model's answer during Steps 1-2.
+Neither model sees the other model's answer during Steps 1-2. Tips without odds are estimated from the
+brief and league base rates only.
 """
 
 import json
@@ -65,16 +67,23 @@ Then, max ~250 words, terse bullets:
 6. Unknown: what you could not confirm."""
 
 ESTIMATE_SYSTEM = (
-    "You are a careful football forecaster. Estimate full-time (90 minutes + stoppage) probabilities "
-    "using ONLY the brief and general football knowledge. Be calibrated: in a typical league the home "
-    "side wins ~45%, draws ~26%, away ~29%; Over 2.5 and both-teams-to-score are each ~50%. Move away "
-    "from these only as far as the evidence in the brief justifies. Unconfirmed information should move "
-    "you less than confirmed information. You are never told any betting price. Reply with JSON only."
+    "You are a confident, data-driven football forecaster working for an experienced bettor. Every tip "
+    "you see was chosen after research and can win; your job is to rate how likely it is to win as "
+    "accurately as possible, so the strongest tips stand out from the rest. Estimate full-time "
+    "(90 minutes + stoppage) probabilities. When the market price of the tipped selection is given, it "
+    "is the best summary of all public information: START from it and adjust for what the brief shows - "
+    "confirmed absences, form, xG, home/away record, motivation, rest. Do not pull numbers toward 50% "
+    "just because you are unsure; when the brief adds little, stay close to the market price. Confirmed "
+    "information moves you more than unconfirmed. For markets without a price, use the brief and typical "
+    "league rates (home ~45%, draw ~26%, away ~29%; Over 2.5 and both-teams-to-score ~50%), and keep "
+    "every market consistent with your estimate for the tipped one. Reply with JSON only."
 )
+
+BOOKMAKER_MARGIN = 1.05  # typical overround: a price of 1.70 means about 59% / 1.05 = 56% after the margin
 
 ESTIMATE_USER = """Match: {match} (home team first)
 Date: {match_date}
-{extra}
+{anchor}{extra}
 BRIEF:
 {brief}
 
@@ -175,12 +184,23 @@ def analyze_tip(tip_text, extra_notes="", default_match_date=None):
     return result
 
 
-def _estimate(models, label, match, match_date, brief, extra, custom, usage):
+def market_anchor(market_label, odds):
+    """The line that gives both models the tipped selection's price as their starting point."""
+    if not odds:
+        return ""
+    fair = 1 / odds / BOOKMAKER_MARGIN
+    return (f"Tipped selection: {market_label} at odds {odds:.2f} - the market rates it about {fair:.0%} "
+            f"after the bookmaker's margin. Start from {fair:.0%} for this market and move it only for "
+            "concrete evidence in the brief, normally within 8 points either way.\n")
+
+
+def _estimate(models, label, match, match_date, brief, extra, custom, usage, anchor=""):
     custom_key = f' "custom": 0.00,  /* probability of: {custom} */' if custom else ""
     messages = [
         {"role": "system", "content": ESTIMATE_SYSTEM},
         {"role": "user", "content": ESTIMATE_USER.format(match=match, match_date=match_date or "unknown",
-                                                         extra=extra, brief=brief, custom_key=custom_key)},
+                                                         anchor=anchor, extra=extra, brief=brief,
+                                                         custom_key=custom_key)},
     ]
     raw = None
     for attempt, cap in enumerate((ESTIMATE_MAX_TOKENS, ESTIMATE_MAX_TOKENS * 2)):  # one retry with more room
@@ -229,8 +249,10 @@ def _analyze(tip_text, extra_notes, default_match_date, usage):
     match_date, date_source, date_warning = resolve_match_date(meta, default_match_date, started.date())
 
     custom = None if key else market
-    grok = _estimate(GROK, "Estimate (Grok)", tip["match_name"], match_date, brief, extra, custom, usage)
-    claude = _estimate(CLAUDE, "Estimate (Claude)", tip["match_name"], match_date, brief, extra, custom, usage)
+    anchor = market_anchor(MARKET_LABELS.get(key, market) if key else f"{market} (the 'custom' item)", tip["odds"])
+    grok = _estimate(GROK, "Estimate (Grok)", tip["match_name"], match_date, brief, extra, custom, usage, anchor)
+    claude = _estimate(CLAUDE, "Estimate (Claude)", tip["match_name"], match_date, brief, extra, custom, usage,
+                       anchor)
 
     k = key or "custom"
     p_g, p_c = grok["probs"].get(k), claude["probs"].get(k)
