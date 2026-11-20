@@ -74,12 +74,19 @@ def is_check_due(now=None):
 # ---------------------------------------------------------------------------
 # Verification
 # ---------------------------------------------------------------------------
-def _match_could_be_over(tip, today):
-    """Skip tips whose match date is in the future (saves credits). Unknown dates are checked."""
+UGANDA = timezone(timedelta(hours=3))
+
+
+def _match_could_be_over(tip, today, automatic=False):
+    """Skip tips that can't have finished yet (saves credits).
+    Manual check: matches up to today; unknown dates are checked too.
+    Automatic check: only matches from yesterday or earlier (Uganda time) - today's games may not have been
+    played yet, and an app restart must never pay to look them up. Unknown dates are left for the manual check."""
     try:
-        return date.fromisoformat(str(tip.get("match_date"))[:10]) <= today
+        match_day = date.fromisoformat(str(tip.get("match_date"))[:10])
     except ValueError:
-        return True
+        return not automatic
+    return match_day < today if automatic else match_day <= today
 
 
 def _fmt_bet(market, odds):
@@ -216,7 +223,7 @@ def verify_pending_tips(force=False):
                "future": [], "errors": [], "last_checked": now.isoformat(timespec="seconds")}
     usage = []
     try:
-        _verify_tips(summary, now, usage)
+        _verify_tips(summary, now, usage, automatic=not force)
     finally:
         # db.update_tip_result already re-grades slips per tip; this full sweep is a cheap safety net
         # so every user's bet slips match the latest tip results after a verification run.
@@ -234,9 +241,10 @@ def verify_pending_tips(force=False):
     return summary
 
 
-def _verify_tips(summary, now, usage):
+def _verify_tips(summary, now, usage, automatic=False):
+    today = now.astimezone(UGANDA).date()
     for tip in db.list_tips_to_verify():
-        if not _match_could_be_over(tip, now.date()):
+        if not _match_could_be_over(tip, today, automatic):
             summary["future"].append(tip["id"])
             continue
         summary["checked"] += 1
