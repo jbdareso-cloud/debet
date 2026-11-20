@@ -4,6 +4,7 @@ The old multi-user/subscriber version is kept in archive/app_multiuser.py.
 """
 
 import json
+import math
 import threading
 from datetime import date, datetime, timedelta, timezone
 
@@ -515,6 +516,27 @@ def markets_table(probs):
     return "\n".join(rows)
 
 
+def alternatives(tip, n=2):
+    """Other markets on the same match worth checking at the bookmaker: both models agree, the price needed
+    for +5% value is at least the minimum odds. Returns [(label, chance, odds needed)], likeliest first."""
+    if not tip.get("probs_json"):
+        return []
+    probs = json.loads(tip["probs_json"])
+    found = []
+    for k, p in probs["combined"].items():
+        g, c = probs["grok"].get(k), probs["claude"].get(k)
+        if k == probs.get("market_key") or not p or g is None or c is None or abs(g - c) > ve.MAX_MODEL_GAP:
+            continue
+        need = math.ceil((1 + ve.VALUE_MIN) / p * 100) / 100
+        if need >= ve.MIN_ODDS:
+            family = "btts" if k.startswith("btts") else "goals" if k[:4] in ("over", "unde") else "result"
+            found.append((family, SHORT_MARKET.get(k, ve.MARKET_LABELS.get(k, k)), p, need))
+    best = {}  # likeliest market of each type (result / goals / BTTS), so the suggestions differ
+    for fam, label, p, need in sorted(found, key=lambda a: -a[2]):
+        best.setdefault(fam, (label, p, need))
+    return sorted(best.values(), key=lambda a: -a[1])[:n]
+
+
 def tip_card(tip, result=None):
     """One tip: its price, what Grok and Claude think, the value and the decision. Details tucked away."""
     tid = tip["id"]
@@ -532,6 +554,11 @@ def tip_card(tip, result=None):
             c[2].markdown(":gray[not analysed]")
         value = f"  \nvalue **{tip['value']:+.0%}**" if tip.get("value") is not None else ""
         c[3].markdown(DECISION_BADGE.get(tip.get("decision"), ai_label(tip)) + value)
+        if tip.get("decision") not in ("BEST", "VALUE", "SPLIT"):
+            alts = alternatives(tip)
+            if alts:
+                st.markdown("🔁 **Alternatives to check:** " + " · ".join(
+                    f"**{label}** ({p:.0%}) - bet only at **{need:.2f}+**" for label, p, need in alts))
 
         with st.expander("Why? (brief, each model's reasons, all markets)"):
             if not tip.get("ai_verdict"):
