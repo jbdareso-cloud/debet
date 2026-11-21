@@ -83,7 +83,6 @@ def main():
     print(f"Analysing {len(entries)} tip(s) for {today}:", *[e["line"] for e in entries], sep="\n  ")
     job_id = ajobs.run_now(entries, "", today.isoformat())
     job = db.get_job(job_id)
-    db.update_job(job_id, message=f"🤖 Automatic run · {job['message']}")
     print(f"Done: {job['status']} · {job['message']} · AI cost ${job['cost_usd']:.3f}")
     if job["status"] != "done":
         sys.exit(1)  # shows as a failed run on GitHub
