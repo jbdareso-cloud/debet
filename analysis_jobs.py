@@ -23,6 +23,13 @@ def start(entries, notes, default_date):
     return job_id
 
 
+def run_now(entries, notes, default_date):
+    """Same as start(), but waits for the job to finish (for the scheduled daily run). Returns the job id."""
+    job_id = db.create_job(len(entries))
+    _run(job_id, entries, notes, default_date)
+    return job_id
+
+
 def _save(entry, result, error, default_date):
     tip = parse_tip(entry["line"])
     db.delete_failed_duplicates(tip["match_name"], tip["market"])
