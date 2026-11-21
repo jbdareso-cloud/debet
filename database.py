@@ -398,7 +398,7 @@ _TIP_COLUMNS_V2 = (
 )
 
 # Group A slots carry the tipster's 4 tips, Group B slots the user's own picks.
-SOURCE_LABELS = {TIP_GROUPS[0]: "Tipster", TIP_GROUPS[1]: "Mine"}
+SOURCE_LABELS = {TIP_GROUPS[0]: "Daily", TIP_GROUPS[1]: "Mine"}
 
 # A published tip can be changed or unpublished for this long (to fix a mis-click); after that it is
 # locked so the public track record can't be edited.
@@ -1064,7 +1064,7 @@ def delete_failed_duplicates(match_name, market):
 # --- Statistics --------------------------------------------------------------
 # --- 30-day Performance Comparison Lab (admin only) ---------------------------------
 PERFORMANCE_CATEGORIES = (
-    ("group_a", "Tipster - all tips"),
+    ("group_a", "Daily tips - all"),
     ("group_b", "Mine - all picks"),
     ("raw_all", "All tips combined"),
     ("ai_approved", "AI value bets (every tip that passed)"),
