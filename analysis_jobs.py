@@ -30,6 +30,21 @@ def run_now(entries, notes, default_date):
     return job_id
 
 
+def publish_client_days(tip_ids):
+    """Your own picks go live to clients automatically: rebuild and publish the tiers of every match day
+    that has own picks in this run. The daily-site tips (TIP_GROUPS[0]) are never published."""
+    import client_tiers as ct  # here, to keep this module light for the scheduled run
+    days = {str(t.get("match_date"))[:10] for t in (db.get_tip(i) for i in tip_ids)
+            if t and t.get("tip_group") == db.TIP_GROUPS[1] and t.get("match_date")}
+    for day in sorted(days):
+        try:
+            data = ct.build_day(day)
+            if data:
+                db.save_client_day(day, data, publish=True)
+        except Exception as exc:  # publishing must never break the analysis itself
+            print(f"[DeBet] publishing tiers for {day} failed: {exc}", flush=True)
+
+
 def _save(entry, result, error, default_date):
     tip = parse_tip(entry["line"])
     db.delete_failed_duplicates(tip["match_name"], tip["market"])
@@ -84,6 +99,7 @@ def _run(job_id, entries, notes, default_date):
                     "decision", "ai_verdict", "p_final", "value", "challenge_note", "full_debate_log", "risk_factor")
                     if k in fields})
         db.update_job(job_id, status="done", message=message, cost_usd=round(total_cost, 4))
+        publish_client_days(tip_ids)
     except Exception as exc:
         traceback.print_exc()
         db.update_job(job_id, status="failed", message=f"Analysis stopped: {exc}", tip_ids=tip_ids,
