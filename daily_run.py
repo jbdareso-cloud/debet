@@ -1,6 +1,6 @@
 """Scheduled daily run (GitHub Actions, 13:00 Uganda time): read today's tips and analyse them.
 
-Sources: TaifaTips (4 tips -> slots #1-#4) and BetMines Daily Bets (up to 3 tips -> slots #5-#7).
+Source: TaifaTips (4 tips -> slots #1-#4). More sites can be added to SOURCES if they allow it.
 Safe to run several times a day: each source is analysed at most once per day, and a source that hasn't
 posted yet is picked up by a later scheduled attempt. Tips already analysed by hand are skipped.
 Needs DATABASE_URL and OPENROUTER_API_KEY in the environment. Run by hand with:  python daily_run.py
@@ -23,9 +23,10 @@ from debate_engine import parse_tip  # noqa: E402
 
 UGANDA = timezone(timedelta(hours=3))
 # (name, reader, settings key marking the last day it was analysed, tip group, slots)
+# BetMines is NOT read here: its Cloudflare protection refuses GitHub's servers (HTTP 403), and DeBet
+# doesn't try to get around that. Use the BetMines button in the app (or a screenshot) for slots #5-#7.
 SOURCES = [
     ("TaifaTips", lambda today: ts.read_tips(), "AUTO_RUN_DATE", 0, [1, 2, 3, 4]),
-    ("BetMines", lambda today: ts.read_betmines(today), "AUTO_RUN_BETMINES", 1, [5, 6, 7]),
 ]
 
 
