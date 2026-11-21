@@ -30,6 +30,7 @@ import database as db  # noqa: E402  (must come after the secrets are loaded)
 import analysis_jobs as ajobs
 import result_verifier as rv
 import screenshot_reader as sr
+import tipster_site as ts
 import value_engine as ve
 from debate_engine import format_cost, parse_tip
 
@@ -493,7 +494,17 @@ def job_summary(job):
 
 def screenshot_box():
     """Upload the tipster's screenshot(s); Claude reads the table and fills the slots for you to check."""
-    with st.expander("📸 Fill the slots from a screenshot", expanded=not st.session_state.get("shot_rows")):
+    with st.expander("🌐📸 Fill the slots from TaifaTips or a screenshot",
+                     expanded=not st.session_state.get("shot_rows")):
+        if st.button("🌐 Get today's tips from TaifaTips (free)", key="site_read", width="stretch"):
+            with st.spinner("Reading taifatips.com..."):
+                try:
+                    rows, problems = ts.read_tips()
+                    st.session_state["shot_rows"] = {"rows": rows, "unreadable": problems, "cost": None,
+                                                     "source": "site"}
+                except RuntimeError as exc:
+                    st.error(str(exc))
+        st.caption("Or upload a screenshot (reads any tipster's table with AI, about $0.006):")
         nonce = st.session_state.get("shot_nonce", 0)
         files = st.file_uploader("Screenshot(s) of the tips table", type=["png", "jpg", "jpeg", "webp"],
                                  accept_multiple_files=True, key=f"shot_files_{nonce}",
@@ -530,6 +541,9 @@ def screenshot_box():
             st.markdown(("⚠️ " if r["error"] else "✅ ") + f"`{r['line']}`" + (f" - {r['error']}" if r["error"] else ""))
         for u in found["unreadable"]:
             st.caption(f"Couldn't read clearly: {u}")
+        if found.get("source") == "site":
+            st.caption("💡 These are TaifaTips' odds. After filling, change each to **your bookmaker's** price - "
+                       "value depends on the odds you actually get.")
         good = [r for r in picked if not r["error"]]
         if len(good) > len(slots):
             st.warning(f"Only the first {len(slots)} fit in these slots.")
