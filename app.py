@@ -5,7 +5,6 @@ The old multi-user/subscriber version is kept in archive/app_multiuser.py.
 
 import json
 import math
-import re
 from datetime import date, datetime, timedelta, timezone
 
 import pandas as pd
@@ -30,10 +29,9 @@ _load_cloud_secrets()
 import database as db  # noqa: E402  (must come after the secrets are loaded)
 import analysis_jobs as ajobs
 import result_verifier as rv
-import screenshot_reader as sr
 import tipster_site as ts
 import value_engine as ve
-from debate_engine import format_cost, parse_tip
+from debate_engine import format_cost
 
 st.set_page_config(page_title="DeBet", page_icon="⚽", layout="wide", initial_sidebar_state="collapsed")
 
@@ -102,9 +100,6 @@ RESULT_BADGE = {"WON": "✅ Won", "LOST": "❌ Lost", "VOID": "⚪ Void", "PENDI
 VERDICT_ICON = {"PLAY AS IS": "🟢 Play", "PLAY REDUCED STAKE": "🟠 Reduced stake", "AVOID": "🔴 Avoid"}
 DECISION_BADGE = {"BEST": "⭐ Best pick", "VALUE": "🟢 Value", "NO VALUE": "⚪ No value",
                   "SPLIT": "🟠 Models disagree", "SHORT PRICE": "⏭️ Price too short", "NO ODDS": "❔ No odds"}
-GROUP_ROWS = ((db.TIP_GROUPS[0], "Tipster's 4 tips", range(1, 5)),
-              (db.TIP_GROUPS[1], "My own picks (optional)", range(5, 8)))
-SHOT_TARGETS = {"Tipster's slots (#1–#4)": range(1, 5), "My slots (#5–#7)": range(5, 8)}
 EAT = timezone(timedelta(hours=3))
 
 
@@ -339,66 +334,44 @@ def dashboard(user):
 # ---------------------------------------------------------------------------
 # 2. Analyse (AI debate)
 # ---------------------------------------------------------------------------
+def start_todays_run(today):
+    """Read today's TaifaTips tips and start their analysis now (same as the 13:00 automatic run)."""
+    try:
+        rows, _ = ts.read_tips()
+    except RuntimeError as exc:
+        st.error(str(exc))
+        return
+    todays = [r for r in rows if r["date"] == today and not r["error"]][:4]
+    if not todays:
+        st.warning("TaifaTips hasn't posted today's tips yet - try again later.")
+        return
+    entries = [{"line": r["line"], "group": db.TIP_GROUPS[0], "slot_number": n} for n, r in enumerate(todays, 1)]
+    db.update_setting("AUTO_RUN_DATE", today)  # the 13:00 automatic run then knows today is done
+    ajobs.start(entries, "", today)
+    st.rerun()
+
+
 def analyse_tab():
-    st.caption("Type one tip per line with its odds, e.g. `Arsenal vs Chelsea over 2.5 1.95`. Grok and Claude each "
-               "start from the market's price and adjust it for the latest data, separately. DeBet then names "
-               "🏆 the tip most likely to win, plus one alternative: the best value tip (at least "
-               f"+{ve.VALUE_MIN:.0%}) or another market. Tips under {ve.MIN_ODDS:.2f} are recorded but not analysed.")
-    if "studio_date" not in st.session_state:
-        st.session_state["studio_date"] = datetime.now(EAT).date()
+    st.caption("Every day at 13:00 (Uganda time) DeBet reads TaifaTips' 4 tips and analyses them automatically. "
+               "Grok and Claude each start from the market price and adjust it for the latest data; DeBet then "
+               "names 🏆 the tip most likely to win, plus one alternative.")
     job = db.latest_job()
     if job and job["status"] == "running":
         job_progress(job["id"])
         return
-    screenshot_box()
-    entries = []
-    with st.form("studio"):
-        match_date = st.date_input("Match date (used if the AI can't confirm it)", key="studio_date",
-                                   format="YYYY-MM-DD")
-        cols = st.columns(2, gap="large")
-        for col, (group, title, slots) in zip(cols, GROUP_ROWS):
-            with col:
-                st.markdown(f"**{title}**")
-                for n in slots:
-                    line = st.text_input(f"#{n}", key=f"tip_row_{n}", label_visibility="collapsed",
-                                         placeholder=f"#{n}  e.g. Arsenal vs Chelsea over 2.5 1.95" if n in (1, 5) else f"#{n}")
-                    entries.append({"slot_number": n, "group": group, "line": line.strip()})
-        notes = st.text_input("Notes for the AI (optional)")
-        again = st.checkbox("Analyse again even if a tip was already analysed in the last few days")
-        run = st.form_submit_button("⚔️ Analyse picks", type="primary")
-
-    if run:
-        filled = [e for e in entries if e["line"]]
-        bad, parsed = [], {}
-        for e in filled:
-            try:
-                parsed[e["slot_number"]] = parse_tip(e["line"])
-            except ValueError as exc:
-                bad.append(f"#{e['slot_number']} `{e['line']}`: {exc}")
-        if not filled:
-            st.error("Type at least one pick.")
-        elif bad:
-            st.error("Fix these first:\n\n" + "\n\n".join(bad))
-        else:
-            dupes = set() if again else db.find_duplicates(
-                [(p["match_name"], p["market"]) for p in parsed.values()])
-            fresh = [e for e in filled if (parsed[e["slot_number"]]["match_name"].lower(),
-                                           parsed[e["slot_number"]]["market"].lower()) not in dupes]
-            if dupes:
-                st.warning("Already analysed recently, skipped (tick the box to redo them): "
-                           + ", ".join(f"{e['line']}" for e in filled if e not in fresh))
-            if fresh:
-                ajobs.start(fresh, notes, match_date.isoformat() if match_date else None)
-                st.rerun()
-
-    shown = set(job["tip_ids"]) if job else set()
-    if job and job["status"] != "running":
-        shown |= job_summary(job)  # also the day's tips from other runs, shown inside the summary
-    recent = [t for t in db.list_tips(result="PENDING", limit=40) if t["id"] not in shown]
-    if recent:
-        st.markdown("#### Earlier picks still waiting for a result")
-        for t in recent:
-            tip_card(t)
+    today = datetime.now(EAT).date().isoformat()
+    job_tips = [t for t in (db.get_tip(i) for i in (job or {}).get("tip_ids", [])) if t]
+    if any(str(t.get("match_date"))[:10] == today for t in job_tips):
+        job_summary(job)
+        return
+    st.info("⏳ **Today's tips haven't been analysed yet.** It happens automatically at 13:00 "
+            "(retries at 14:30 and 16:00 if TaifaTips posts late).")
+    if st.button("▶️ Analyse today's TaifaTips tips now", width="stretch"):
+        with st.spinner("Reading TaifaTips..."):
+            start_todays_run(today)
+    if job:
+        st.markdown("#### Previous analysis")
+        job_summary(job)
 
 
 @st.fragment(run_every=3)
@@ -439,8 +412,8 @@ def pick_clarity(tips, pick):
     lead = pick["p_final"] - runner["p_final"]
     who = f"{runner['match_name']} ({runner['p_final']:.0%})"
     if lead >= CLEAR_LEAD:
-        return f"  \n🟢 **Clear pick** - {lead * 100:.0f} points ahead of your next best, {who}."
-    return (f"  \n🟡 **Close call** - your next best, {who}, is only {lead * 100:.0f} point"
+        return f"  \n🟢 **Clear pick** - {lead * 100:.0f} points ahead of the next best, {who}."
+    return (f"  \n🟡 **Close call** - the next best, {who}, is only {lead * 100:.0f} point"
             f"{'' if round(lead * 100) == 1 else 's'} behind. DeBet can't clearly separate them: "
             "consider splitting your stake over the top tips as singles, or skipping today.")
 
@@ -450,7 +423,7 @@ def tip_line(t):
 
 
 def job_summary(job):
-    """1) DeBet's pick of your tips (likeliest to win)  2) one alternative: the value pick, or a market to check."""
+    """1) DeBet's pick of the day's tips (likeliest to win)  2) one alternative: the value pick, or a market to check."""
     message = job["message"] or ""
     tips = [t for t in (db.get_tip(i) for i in job["tip_ids"]) if t]
     # Judge the whole day together: tips for the same match day analysed in other runs (e.g. the automatic
@@ -477,9 +450,9 @@ def job_summary(job):
             price = f"❔ No odds entered - fair odds **{1 / p:.2f}**."
         stake = db.suggested_stake(st.session_state.get("user_id"))
         stake_txt = f"  \n💰 Suggested stake: **{fmt_money(stake)}**" if stake else ""
-        st.success(f"🏆 **DeBet's pick of your {len(tips)} tips:** {tip_line(pick)}  \n"
+        st.success(f"🏆 **DeBet's pick of the {len(tips)} tips:** {tip_line(pick)}  \n"
                    f"Chance to win **{p:.0%}** (Grok {pick['p_grok']:.0%} · Claude {pick['p_claude']:.0%}) - "
-                   f"the highest of your tips. {price}{pick_clarity(tips, pick)}{stake_txt}")
+                   f"the highest of the tips. {price}{pick_clarity(tips, pick)}{stake_txt}")
     # The one alternative
     if best and pick and best["id"] == pick["id"]:
         st.caption("⭐ It's also DeBet's value pick - it passed the challenge round.")
@@ -500,83 +473,6 @@ def job_summary(job):
     for t in tips:
         tip_card(t)
     return {t["id"] for t in tips}
-
-
-def screenshot_box():
-    """Upload the tipster's screenshot(s); Claude reads the table and fills the slots for you to check."""
-    with st.expander("🌐📸 Fill the slots from TaifaTips or a screenshot",
-                     expanded=not st.session_state.get("shot_rows")):
-        sites = []
-        if st.button("🌐 Get today's tips from TaifaTips → #1–#4 (free)", key="site_read", width="stretch"):
-            sites.append(("TaifaTips", ts.read_tips, "Tipster's slots (#1–#4)"))
-        for name, reader, slots_label in sites:
-            with st.spinner(f"Reading {name}..."):
-                try:
-                    rows, problems = reader()
-                    st.session_state["shot_rows"] = {"rows": rows, "unreadable": problems, "cost": None,
-                                                     "source": name}
-                    st.session_state["shot_target"] = slots_label
-                except RuntimeError as exc:
-                    st.error(str(exc))
-        st.caption("Or upload a screenshot (reads any tipster's table with AI, about $0.006):")
-        nonce = st.session_state.get("shot_nonce", 0)
-        files = st.file_uploader("Screenshot(s) of the tips table", type=["png", "jpg", "jpeg", "webp"],
-                                 accept_multiple_files=True, key=f"shot_files_{nonce}",
-                                 help=f"Up to {sr.MAX_IMAGES} images. On a phone, pick the screenshot from your gallery.")
-        target = st.radio("Put the tips in", list(SHOT_TARGETS), horizontal=True, key="shot_target")
-        if st.button("🔎 Read tips", disabled=not files, key="shot_read"):
-            with st.spinner("Reading the screenshot..."):
-                try:
-                    rows, unreadable, cost = sr.read_tips([(f.getvalue(), f.type) for f in files],
-                                                          datetime.now(EAT).date())
-                    db.record_ai_cost("Screenshot", (cost or {}).get("total_usd"))
-                except Exception as exc:
-                    st.error(str(exc))
-                    rows = None
-            if rows is not None:
-                st.session_state["shot_rows"] = {"rows": rows, "unreadable": unreadable,
-                                                 "cost": (cost or {}).get("total_usd")}
-
-        found = st.session_state.get("shot_rows")
-        if not found:
-            return
-        rows = found["rows"]
-        if not rows:
-            st.warning("No tips found in that screenshot.")
-            return
-        dates = sorted({r["date"] for r in rows if r["date"]}, reverse=True)
-        day = st.radio("Which day?", dates, horizontal=True, format_func=fmt_date, key="shot_day") if len(dates) > 1 \
-            else (dates[0] if dates else None)
-        picked = [r for r in rows if r["date"] == day or not dates]
-        slots = list(SHOT_TARGETS[target])
-        st.caption(f"Found {len(rows)} tip(s)" + (f" · cost ${found['cost']:.3f}" if found.get("cost") else "")
-                   + f". These go into slots #{slots[0]}–#{slots[-1]} - check them before analysing.")
-        for r in picked:
-            st.markdown(("⚠️ " if r["error"] else "✅ ") + f"`{r['line']}`" + (f" - {r['error']}" if r["error"] else ""))
-        for u in found["unreadable"]:
-            st.caption(f"Couldn't read clearly: {u}")
-        if found.get("source") == "TaifaTips":
-            st.caption(f"💡 These are {found['source']}' odds. After filling, change each to **your bookmaker's** "
-                       "price - value depends on the odds you actually get.")
-        good = [r for r in picked if not r["error"]]
-        # tips priced under the minimum aren't analysed anyway - fill the slots with the others first
-        too_short = lambda r: (m := re.search(r"@ (\d+(?:\.\d+)?)$", r["line"])) and float(m.group(1)) < ve.MIN_ODDS
-        good.sort(key=lambda r: bool(too_short(r)))
-        if len(good) > len(slots):
-            st.warning(f"Only {len(slots)} fit in these slots: "
-                       + ", ".join(f"`{r['line']}`" for r in good[len(slots):]) + " left out"
-                       + (f" (odds under {ve.MIN_ODDS:.2f} go last)." if any(too_short(r) for r in good) else "."))
-        if st.button(f"⬇️ Put {min(len(good), len(slots))} tip(s) in the slots", type="primary",
-                     disabled=not good, key="shot_fill"):
-            for n in slots:
-                st.session_state[f"tip_row_{n}"] = ""
-            for n, r in zip(slots, good):
-                st.session_state[f"tip_row_{n}"] = r["line"]
-            if day:
-                st.session_state["studio_date"] = date.fromisoformat(day)
-            st.session_state.pop("shot_rows", None)
-            st.session_state["shot_nonce"] = nonce + 1  # clears the uploader
-            st.rerun()
 
 
 SHORT_MARKET = {"home": "1 Home", "draw": "X Draw", "away": "2 Away", "1x": "1X", "x2": "X2", "12": "12",
