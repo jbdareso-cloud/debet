@@ -114,3 +114,28 @@ def settle_pending(key=None, today=None, log=print):
             log(f"  {t['match_name']} {g['score']}: {t['user_proposed_tip']} -> {outcome}")
     log(f"Results: settled {settled} tip(s).")
     return settled
+
+
+def check(day=None):
+    """Read-only test of the key: fetch one day and show which of that day's tips are found (changes nothing)."""
+    key = os.environ.get("API_FOOTBALL_KEY", "").strip()
+    if not key:
+        raise SystemExit("API_FOOTBALL_KEY is not set.")
+    day = day or (datetime.now(UGANDA).date() - timedelta(days=1))
+    games = fetch_day(day, key)
+    finished = [g for g in games if g["score"]]
+    print(f"Key works: {len(games)} fixtures on {day}, {len(finished)} finished.")
+    tips = [t for t in db.list_tips(limit=200) if str(t.get("match_date"))[:10] == day.isoformat()]
+    for t in tips:
+        g = find_game(t["match_name"], games)
+        print(f"  {t['match_name']}: " + (f"found as {g['home']} vs {g['away']}, {g['status']} {g['score'] or ''}"
+                                          if g else "NOT found"))
+
+
+if __name__ == "__main__":  # python results_api.py --check [YYYY-MM-DD]
+    import sys
+    from dotenv import load_dotenv
+    load_dotenv()
+    if "--check" in sys.argv:
+        extra = [a for a in sys.argv[1:] if re.fullmatch(r"\d{4}-\d{2}-\d{2}", a)]
+        check(date.fromisoformat(extra[0]) if extra else None)
