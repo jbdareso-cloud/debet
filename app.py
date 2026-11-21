@@ -3,6 +3,7 @@
 The old multi-user/subscriber version is kept in archive/app_multiuser.py.
 """
 
+import html
 import json
 import math
 from datetime import date, datetime, timedelta, timezone
@@ -830,41 +831,158 @@ def clients_tab():
             st.caption("Nobody has signed up yet.")
 
 
+VIP_CSS = """<style>
+:root {--vip-gold:#D4AF37; --vip-gold-hi:#F6E7B0; --vip-ink:#0E0E13; --vip-head:#17130A; --vip-line:#D4AF3733;
+       --vip-muted:#B5AE98;}
+.vip-hero {background:radial-gradient(120% 140% at 0% 0%, #2A2008 0%, #0E0E13 62%); border:1px solid var(--vip-line);
+  border-radius:18px; padding:18px 18px 16px; margin:4px 0 6px; position:relative; overflow:hidden;}
+.vip-hero:after {content:""; position:absolute; right:-40px; top:-40px; width:140px; height:140px; border-radius:50%;
+  background:radial-gradient(circle, #D4AF3730, transparent 70%);}
+.vip-kicker {font:700 .68rem Inter,sans-serif; letter-spacing:3px; color:var(--vip-gold); text-transform:uppercase;}
+.vip-title {font-family:'Barlow Condensed',sans-serif; font-weight:800; font-size:2.1rem; line-height:1;
+  color:var(--vip-gold-hi); margin-top:4px;}
+.vip-date {color:var(--vip-muted); font-size:.85rem; margin-top:6px;}
+.vip-sec {font-family:'Barlow Condensed',sans-serif; font-weight:700; font-size:1.1rem; letter-spacing:1.5px;
+  text-transform:uppercase; color:var(--vip-gold); margin:22px 0 8px; display:flex; align-items:center; gap:8px;}
+.vip-sec:after {content:""; flex:1; height:1px; background:linear-gradient(90deg, var(--vip-line), transparent);}
+.vip-table {width:100%; border-collapse:separate; border-spacing:0; background:var(--vip-ink);
+  border:1px solid var(--vip-line); border-radius:14px; overflow:hidden; font-size:.9rem;}
+.vip-table th {background:var(--vip-head); color:var(--vip-gold); font:600 .66rem Inter,sans-serif;
+  letter-spacing:1.5px; text-transform:uppercase; text-align:left; padding:10px; border-bottom:1px solid var(--vip-line);}
+.vip-table td {padding:12px 10px; border-bottom:1px solid #FFFFFF0F; color:#EDEDED; vertical-align:middle;}
+.vip-table tr:last-child td {border-bottom:none;}
+.vip-table th, .vip-table td {border-left:none !important; border-right:none !important; border-top:none !important;}
+.vip-table td.vip-sel {width:100%; word-break:break-word;}
+.vip-day td {background:#15151C; color:var(--vip-gold); font:700 .7rem Inter,sans-serif; letter-spacing:1.5px;
+  text-transform:uppercase; padding:7px 10px !important;}
+[data-testid="stMarkdownContainer"]:has(.vip-table) {max-width:100%; overflow-x:auto;}
+.vip-table .num {text-align:right; font-variant-numeric:tabular-nums; white-space:nowrap;}
+.vip-table th.num {text-align:right;}
+.vip-sel b {display:block; color:#FFF; font-weight:600; line-height:1.25;}
+.vip-sel span {color:var(--vip-muted); font-size:.8rem;}
+.vip-odds {font-family:'Barlow Condensed',sans-serif; font-weight:700; font-size:1.2rem; color:var(--vip-gold-hi);}
+.vip-min {color:var(--vip-muted); font-size:.75rem;}
+.vip-badge {display:inline-block; padding:4px 8px; border-radius:999px; font:800 .62rem Inter,sans-serif;
+  letter-spacing:1px; color:#111; white-space:nowrap;}
+.b-platinum {background:linear-gradient(135deg,#FFFFFF,#C9D3E3 50%,#8E9BB3);}
+.b-gold {background:linear-gradient(135deg,#FFF1B8,#D4AF37 55%,#A67C00);}
+.b-silver {background:linear-gradient(135deg,#F2F2F2,#BFC3C7 55%,#8D9297);}
+.b-acca {background:linear-gradient(135deg,#F3E8FF,#C4A7FF 55%,#8B5CF6);}
+.vip-foot td {background:var(--vip-head); color:var(--vip-gold-hi); font-weight:600;}
+.vip-chips {display:grid; grid-template-columns:repeat(4, minmax(0,1fr)); gap:8px; margin:2px 0 12px;}
+.vip-chip {background:var(--vip-ink); border:1px solid var(--vip-line); border-radius:12px; padding:9px 10px;}
+.vip-chip .t {font:700 .58rem Inter,sans-serif; letter-spacing:1.4px; color:var(--vip-muted); text-transform:uppercase;}
+.vip-chip .v {font-family:'Barlow Condensed',sans-serif; font-weight:700; font-size:1.35rem; color:var(--vip-gold-hi);}
+.vip-chip .s {color:var(--vip-muted); font-size:.72rem;}
+.r-won {color:#4ADE80; font-weight:700;} .r-lost {color:#F87171; font-weight:700;}
+.r-void, .r-pend {color:var(--vip-muted);}
+.vip-empty {background:var(--vip-ink); border:1px dashed var(--vip-line); border-radius:14px; padding:22px;
+  text-align:center; color:var(--vip-muted);}
+.vip-note {color:#8F8A7A; font-size:.72rem; margin-top:18px; text-align:center;}
+@media (max-width: 480px) {.vip-table {font-size:.84rem;} .vip-table td, .vip-table th {padding:9px 7px;}
+  .vip-chips {grid-template-columns:repeat(2, minmax(0,1fr));}}
+</style>"""
+VIP_TIERS = (("platinum", "💎 PLATINUM"), ("gold", "🥇 GOLD"), ("silver", "🥈 SILVER"))
+VIP_RESULT = {"WON": ('<span class="r-won">✓ Won</span>'), "LOST": '<span class="r-lost">✕ Lost</span>',
+              "VOID": '<span class="r-void">Void</span>', None: '<span class="r-pend">Pending</span>'}
+
+
+def _e(text):
+    return html.escape(str(text or ""))
+
+
+def _badge(key, label):
+    return f'<span class="vip-badge b-{key}">{label}</span>'
+
+
+def _sel_cell(sel):
+    return f'<td class="vip-sel"><b>{_e(sel["match"])}</b><span>{_e(sel["market"])}</span></td>'
+
+
+def _odds_cell(sel):
+    if sel.get("odds"):
+        return f'<td class="num"><span class="vip-odds">{sel["odds"]:.2f}</span></td>'
+    return f'<td class="num"><span class="vip-odds">{sel["min_odds"]:.2f}+</span><br><span class="vip-min">min</span></td>'
+
+
+def vip_today_table(day):
+    rows = "".join(f"<tr><td>{_badge(k, label)}</td>{_sel_cell(day[k])}{_odds_cell(day[k])}"
+                   f'<td class="num">{day[k]["chance"]:.0%}</td></tr>' for k, label in VIP_TIERS if day.get(k))
+    return ('<table class="vip-table"><tr><th>Tier</th><th>Selection</th><th class="num">Odds</th>'
+            f'<th class="num">Chance</th></tr>{rows}</table>')
+
+
+def vip_acca_table(acca):
+    rows = "".join(f'<tr><td class="num">{i}</td>{_sel_cell(l)}<td class="num">{l["chance"]:.0%}</td></tr>'
+                   for i, l in enumerate(acca["legs"], 1))
+    return ('<table class="vip-table"><tr><th class="num">Leg</th><th>Selection</th><th class="num">Chance</th></tr>'
+            f'{rows}<tr class="vip-foot"><td></td><td>All {len(acca["legs"])} legs win · take combined odds '
+            f'<b>{acca["min_odds"]:.2f}+</b></td><td class="num">{acca["chance"]:.0%}</td></tr></table>')
+
+
+def vip_results_table(past):
+    rows = []
+    for d in past:
+        entries = [(k, label, d.get(k), ct.outcome(d.get(k))) for k, label in VIP_TIERS if d.get(k)]
+        if d.get("acca"):
+            acca = d["acca"]
+            entries.append(("acca", "🎟️ ACCA", {"match": f"{len(acca['legs'])}-leg accumulator",
+                                               "market": " + ".join(l["market"] for l in acca["legs"])},
+                            ct.acca_outcome(acca)))
+        if entries:
+            rows.append(f'<tr class="vip-day"><td colspan="3">{_e(fmt_date(d["day"]))}</td></tr>')
+        for k, label, sel, res in entries:
+            rows.append(f'<tr><td>{_badge(k, label.split()[-1])}</td>{_sel_cell(sel)}'
+                        f'<td class="num">{VIP_RESULT[res]}</td></tr>')
+    return ('<table class="vip-table"><tr><th>Tier</th><th>Selection</th><th class="num">Result</th></tr>'
+            + "".join(rows) + "</table>")
+
+
+def vip_record(past):
+    chips = []
+    for k, label in VIP_TIERS + (("acca", "🎟️ ACCA"),):
+        res = [ct.acca_outcome(d.get(k)) if k == "acca" else ct.outcome(d.get(k)) for d in past if d.get(k)]
+        won, lost = res.count("WON"), res.count("LOST")
+        rate = f"{won / (won + lost):.0%}" if won + lost else "—"
+        chips.append(f'<div class="vip-chip"><div class="t">{label.split()[-1]}</div><div class="v">{rate}</div>'
+                     f'<div class="s">{won} won · {lost} lost</div></div>')
+    return f'<div class="vip-chips">{"".join(chips)}</div>'
+
+
 def client_main(user):
-    """What a client sees: today's tiers, the accumulator, and recent results. Nothing else."""
+    """What a client sees, VIP style: today's tiers, the accumulator, the record and recent results."""
+    st.markdown(VIP_CSS, unsafe_allow_html=True)
     head, menu = st.container(key="topbar").columns([5, 1], vertical_alignment="center")
     head.markdown('<div class="db-brand">DE<span>BET</span></div>', unsafe_allow_html=True)
     with menu.popover("⚙️", width="stretch"):
         st.caption(f"Logged in as {user['full_name']}")
         if st.button("Log out", width="stretch"):
             logout()
-    today = datetime.now(EAT).date().isoformat()
+    now = datetime.now(EAT)
+    today = now.date().isoformat()
     days = db.list_published_days(30)
     current = min((d for d in days if d["day"] >= today), key=lambda d: d["day"], default=None)
-    st.markdown(f"### Today's tips · {datetime.now(EAT):%A %d %B}")
-    if current:
-        if current["day"] != today:
-            st.caption(f"For {fmt_date(current['day'])}")
-        tier_cards(current)
-    else:
-        st.info("Today's tips will appear here once they're ready.")
-
     past = [d for d in days if d["day"] < today]
-    st.markdown("### Recent results")
-    summary = []
-    for k, title, _ in TIERS + (("acca", "🎟️ ACCA", ""),):
-        results = [ct.acca_outcome(d.get(k)) if k == "acca" else ct.outcome(d.get(k)) for d in past]
-        won, lost = results.count("WON"), results.count("LOST")
-        if won + lost:
-            summary.append(f"{title} {won}/{won + lost}")
-    if summary:
-        st.caption("Won / settled, last 30 days: " + " · ".join(summary))
-    for d in past[:14]:
-        with st.expander(f"{fmt_date(d['day'])}"):
-            tier_cards(d, show_results=True)
-    if not past:
-        st.caption("Results will appear here after the first tips are settled.")
-    st.caption("18+ only. Tips are opinions, not guarantees - never bet more than you can afford to lose.")
+    for_day = "" if not current or current["day"] == today else f" · tips for {fmt_date(current['day'])}"
+    show = st.markdown
+    show(f'<div class="vip-hero"><div class="vip-kicker">★ VIP members</div><div class="vip-title">Today\'s selections'
+         f'</div><div class="vip-date">{now:%A %d %B %Y}{_e(for_day)}</div></div>', unsafe_allow_html=True)
+
+    if current:
+        show('<div class="vip-sec">Daily picks</div>' + vip_today_table(current), unsafe_allow_html=True)
+        if current.get("acca"):
+            show('<div class="vip-sec">🎟️ VIP accumulator</div>' + vip_acca_table(current["acca"]),
+                 unsafe_allow_html=True)
+    else:
+        show('<div class="vip-empty">Today\'s VIP selections will appear here once they\'re ready.</div>',
+             unsafe_allow_html=True)
+
+    show('<div class="vip-sec">VIP record · last 30 days</div>' + vip_record(past), unsafe_allow_html=True)
+    if past:
+        show('<div class="vip-sec">Recent results</div>' + vip_results_table(past[:14]), unsafe_allow_html=True)
+    show('<div class="vip-note">18+ only · Tips are opinions, not guarantees · Never bet more than you can afford '
+         'to lose · <a href="?page=terms">Terms</a> · <a href="?page=privacy">Privacy</a></div>',
+         unsafe_allow_html=True)
 
 
 # ---------------------------------------------------------------------------
