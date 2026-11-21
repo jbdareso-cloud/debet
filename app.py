@@ -390,9 +390,9 @@ def analyse_tab():
                 ajobs.start(fresh, notes, match_date.isoformat() if match_date else None)
                 st.rerun()
 
-    if job and job["status"] != "running":
-        job_summary(job)
     shown = set(job["tip_ids"]) if job else set()
+    if job and job["status"] != "running":
+        shown |= job_summary(job)  # also the day's tips from other runs, shown inside the summary
     recent = [t for t in db.list_tips(result="PENDING", limit=40) if t["id"] not in shown]
     if recent:
         st.markdown("#### Earlier picks still waiting for a result")
@@ -451,13 +451,21 @@ def tip_line(t):
 def job_summary(job):
     """1) DeBet's pick of your tips (likeliest to win)  2) one alternative: the value pick, or a market to check."""
     message = job["message"] or ""
-    tips = sorted((t for t in (db.get_tip(i) for i in job["tip_ids"]) if t), key=lambda t: t.get("slot_number") or 99)
+    tips = [t for t in (db.get_tip(i) for i in job["tip_ids"]) if t]
+    # Judge the whole day together: tips for the same match day analysed in other runs (e.g. the automatic
+    # 13:00 run of the tipster's 4, then your own 3 added later) join this run's tips.
+    days = {str(t["match_date"])[:10] for t in tips if t.get("match_date")}
+    ids = {t["id"] for t in tips}
+    since = (datetime.now(timezone.utc) - timedelta(hours=36)).isoformat()
+    tips += [t for t in db.list_tips(limit=60) if t["id"] not in ids and str(t.get("match_date"))[:10] in days
+             and str(t["created_at"]) >= since and t.get("ai_verdict")]
+    tips.sort(key=lambda t: t.get("slot_number") or 99)
     if job["status"] in ("failed", "interrupted"):
         st.error(message if job["status"] == "failed" else
                  "The last analysis was interrupted (the app restarted). Tips already finished are saved below; "
                  "run the rest again.")
     pick = top_pick(tips) if job["status"] == "done" else None
-    best = next((t for t in tips if t.get("decision") == "BEST"), None)
+    best = max((t for t in tips if t.get("decision") == "BEST"), key=lambda t: t.get("value") or 0, default=None)
     if pick:
         p, odds = pick["p_final"], pick.get("odds")
         if odds:
@@ -490,6 +498,7 @@ def job_summary(job):
     st.markdown(f"#### Last run · {started} · AI cost ${job['cost_usd']:.3f}")
     for t in tips:
         tip_card(t)
+    return {t["id"] for t in tips}
 
 
 def screenshot_box():
