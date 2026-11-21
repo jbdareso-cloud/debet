@@ -151,13 +151,39 @@ def logout(rerun=True):
     for key in list(st.session_state.keys()):
         del st.session_state[key]
     st.session_state["logged_out"] = True
+    if google_signed_in():
+        st.logout()  # also forget the Google sign-in, or the next run would log straight back in
     if rerun:
         st.rerun()
+
+
+def google_ready():
+    """True when Google sign-in is configured in the app's Secrets ([auth] + [auth.google])."""
+    try:
+        return "auth" in st.secrets and "google" in st.secrets["auth"]
+    except Exception:
+        return False
+
+
+def google_signed_in():
+    try:
+        return google_ready() and bool(st.user.is_logged_in)
+    except Exception:
+        return False
 
 
 def current_user():
     """The logged-in user (admin = you, subscriber = a client), or None."""
     uid = st.session_state.get("user_id")
+    if not uid and google_signed_in():  # just came back from Google: find or create their account
+        try:
+            user = db.google_user(st.user.get("email"), st.user.get("name"))
+        except ValueError as exc:
+            st.session_state["login_error"] = str(exc)
+            st.logout()
+            return None
+        start_session(user["id"])
+        uid = user["id"]
     if not uid and not st.session_state.get("logged_out"):
         token = st.context.cookies.get(SESSION_COOKIE)
         user = db.get_session_user(token)
@@ -179,46 +205,32 @@ def login_page():
                 '<div class="db-kicker">Daily football tips</div>', unsafe_allow_html=True)
     _, mid, _ = st.columns([1, 2, 1])
     with mid:
-        t_login, t_join = st.tabs(["Log in", "Create account"])
-    with t_login, st.form("login"):
-        ident = st.text_input("Phone number (or email)", placeholder="0772 123456")
-        pw = st.text_input("Password", type="password")
-        if st.form_submit_button("Log in", type="primary", width="stretch"):
-            locked = db.login_lock_minutes_left(ident)
-            if locked:
-                st.error(f"Too many wrong passwords. Try again in {locked} minute(s).")
-                st.stop()
-            user = db.login_user(ident, pw)
-            if user and user["role"] in ("admin", "subscriber"):
-                db.clear_login_failures(ident)
-                start_session(user["id"])
-                st.rerun()
-            db.record_login_failure(ident)
-            st.error("Wrong phone number or password.")
-    with t_join, st.form("join"):
-        name = st.text_input("Your name")
-        phone = st.text_input("Phone number", placeholder="0772 123456")
-        p1 = st.text_input("Password (at least 8 characters)", type="password")
-        p2 = st.text_input("Repeat password", type="password")
-        adult = st.checkbox("I am 18 or older, and I understand betting is risky and tips are opinions, "
-                            "not guarantees.")
-        if st.form_submit_button("Create account", type="primary", width="stretch"):
-            if not adult:
-                st.error("You must be 18 or older and accept the risk notice.")
-            elif len(p1) < 8:
-                st.error("The password needs at least 8 characters.")
-            elif p1 != p2:
-                st.error("The passwords don't match.")
-            elif len(db.normalize_phone(phone)) < 9:
-                st.error("Enter a valid phone number.")
-            else:
-                try:
-                    user = db.register_user(name, phone, p1)
-                except ValueError as exc:
-                    st.error(str(exc))
-                else:
-                    start_session(user["id"])
-                    st.rerun()
+        if st.session_state.get("login_error"):
+            st.error(st.session_state.pop("login_error"))
+        if google_ready():
+            st.button("Continue with Google", type="primary", width="stretch", icon=":material/login:",
+                      on_click=st.login, args=("google",))
+            st.caption("New here? The same button creates your account - nothing to fill in. "
+                       "By continuing you confirm you are 18 or older and understand that betting is risky "
+                       "and tips are opinions, not guarantees.")
+        else:
+            st.info("Sign-in for clients is being set up - please check back soon.")
+        with st.expander("Admin"):
+            with st.form("login"):
+                ident = st.text_input("Login")
+                pw = st.text_input("Password", type="password")
+                if st.form_submit_button("Log in", width="stretch"):
+                    locked = db.login_lock_minutes_left(ident)
+                    if locked:
+                        st.error(f"Too many wrong passwords. Try again in {locked} minute(s).")
+                        st.stop()
+                    user = db.login_user(ident, pw)
+                    if user and user["role"] == "admin":
+                        db.clear_login_failures(ident)
+                        start_session(user["id"])
+                        st.rerun()
+                    db.record_login_failure(ident)
+                    st.error("Wrong login or password.")
 
 
 # ---------------------------------------------------------------------------
@@ -824,7 +836,8 @@ def clients_tab():
     with st.expander(f"👥 Clients ({len(clients)})"):
         for u in clients:
             c = st.columns([3, 1], vertical_alignment="center")
-            c[0].markdown(f"**{u['full_name']}** · {u['phone_number']}  \n:gray[joined {fmt_date(u['created_at'])}]")
+            contact = u.get("email") or u["phone_number"]
+            c[0].markdown(f"**{u['full_name']}** · {contact}  \n:gray[joined {fmt_date(u['created_at'])}]")
             if c[1].button("Remove", key=f"rm_{u['id']}"):
                 db.delete_client(u["id"])
                 st.rerun()
