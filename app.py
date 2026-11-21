@@ -5,6 +5,7 @@ The old multi-user/subscriber version is kept in archive/app_multiuser.py.
 
 import json
 import math
+import re
 from datetime import date, datetime, timedelta, timezone
 
 import pandas as pd
@@ -505,12 +506,19 @@ def screenshot_box():
     """Upload the tipster's screenshot(s); Claude reads the table and fills the slots for you to check."""
     with st.expander("🌐📸 Fill the slots from TaifaTips or a screenshot",
                      expanded=not st.session_state.get("shot_rows")):
-        if st.button("🌐 Get today's tips from TaifaTips (free)", key="site_read", width="stretch"):
-            with st.spinner("Reading taifatips.com..."):
+        b = st.columns(2)
+        sites = []
+        if b[0].button("🌐 TaifaTips → #1–#4 (free)", key="site_read", width="stretch"):
+            sites.append(("TaifaTips", ts.read_tips, "Tipster's slots (#1–#4)"))
+        if b[1].button("🌐 BetMines → #5–#7 (free)", key="betmines_read", width="stretch"):
+            sites.append(("BetMines", lambda: ts.read_betmines(datetime.now(EAT).date()), "My slots (#5–#7)"))
+        for name, reader, slots_label in sites:
+            with st.spinner(f"Reading {name}..."):
                 try:
-                    rows, problems = ts.read_tips()
+                    rows, problems = reader()
                     st.session_state["shot_rows"] = {"rows": rows, "unreadable": problems, "cost": None,
-                                                     "source": "site"}
+                                                     "source": name}
+                    st.session_state["shot_target"] = slots_label
                 except RuntimeError as exc:
                     st.error(str(exc))
         st.caption("Or upload a screenshot (reads any tipster's table with AI, about $0.006):")
@@ -550,12 +558,17 @@ def screenshot_box():
             st.markdown(("⚠️ " if r["error"] else "✅ ") + f"`{r['line']}`" + (f" - {r['error']}" if r["error"] else ""))
         for u in found["unreadable"]:
             st.caption(f"Couldn't read clearly: {u}")
-        if found.get("source") == "site":
-            st.caption("💡 These are TaifaTips' odds. After filling, change each to **your bookmaker's** price - "
-                       "value depends on the odds you actually get.")
+        if found.get("source") in ("TaifaTips", "BetMines"):
+            st.caption(f"💡 These are {found['source']}' odds. After filling, change each to **your bookmaker's** "
+                       "price - value depends on the odds you actually get.")
         good = [r for r in picked if not r["error"]]
+        # tips priced under the minimum aren't analysed anyway - fill the slots with the others first
+        too_short = lambda r: (m := re.search(r"@ (\d+(?:\.\d+)?)$", r["line"])) and float(m.group(1)) < ve.MIN_ODDS
+        good.sort(key=lambda r: bool(too_short(r)))
         if len(good) > len(slots):
-            st.warning(f"Only the first {len(slots)} fit in these slots.")
+            st.warning(f"Only {len(slots)} fit in these slots: "
+                       + ", ".join(f"`{r['line']}`" for r in good[len(slots):]) + " left out"
+                       + (f" (odds under {ve.MIN_ODDS:.2f} go last)." if any(too_short(r) for r in good) else "."))
         if st.button(f"⬇️ Put {min(len(good), len(slots))} tip(s) in the slots", type="primary",
                      disabled=not good, key="shot_fill"):
             for n in slots:
