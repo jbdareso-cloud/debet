@@ -68,7 +68,9 @@ def build_day(day):
     agreed = [t for t in tips if t.get("decision") != "SPLIT"] or tips
     if not agreed:
         return None
-    ranked = sorted(agreed, key=lambda t: (t["p_final"], -(t.get("model_gap") or 0)), reverse=True)
+    by_chance = lambda ts: sorted(ts, key=lambda t: (t["p_final"], -(t.get("model_gap") or 0)), reverse=True)
+    # picks both models agree on come first; the rest only fill a tier that would otherwise be empty
+    ranked = by_chance(agreed) + by_chance([t for t in tips if t not in agreed])
     platinum = ranked[0]
     gold = ranked[1] if len(ranked) > 1 else None
     used = {platinum["id"]} | ({gold["id"]} if gold else set())
