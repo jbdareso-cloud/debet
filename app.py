@@ -151,39 +151,13 @@ def logout(rerun=True):
     for key in list(st.session_state.keys()):
         del st.session_state[key]
     st.session_state["logged_out"] = True
-    if google_signed_in():
-        st.logout()  # also forget the Google sign-in, or the next run would log straight back in
     if rerun:
         st.rerun()
-
-
-def google_ready():
-    """True when Google sign-in is configured in the app's Secrets ([auth] + [auth.google])."""
-    try:
-        return "auth" in st.secrets and "google" in st.secrets["auth"]
-    except Exception:
-        return False
-
-
-def google_signed_in():
-    try:
-        return google_ready() and bool(st.user.is_logged_in)
-    except Exception:
-        return False
 
 
 def current_user():
     """The logged-in user (admin = you, subscriber = a client), or None."""
     uid = st.session_state.get("user_id")
-    if not uid and google_signed_in():  # just came back from Google: find or create their account
-        try:
-            user = db.google_user(st.user.get("email"), st.user.get("name"))
-        except ValueError as exc:
-            st.session_state["login_error"] = str(exc)
-            st.logout()
-            return None
-        start_session(user["id"])
-        uid = user["id"]
     if not uid and not st.session_state.get("logged_out"):
         token = st.context.cookies.get(SESSION_COOKIE)
         user = db.get_session_user(token)
@@ -205,32 +179,43 @@ def login_page():
                 '<div class="db-kicker">Daily football tips</div>', unsafe_allow_html=True)
     _, mid, _ = st.columns([1, 2, 1])
     with mid:
-        if st.session_state.get("login_error"):
-            st.error(st.session_state.pop("login_error"))
-        if google_ready():
-            st.button("Continue with Google", type="primary", width="stretch", icon=":material/login:",
-                      on_click=st.login, args=("google",))
-            st.caption("New here? The same button creates your account - nothing to fill in. "
-                       "By continuing you confirm you are 18 or older and understand that betting is risky "
-                       "and tips are opinions, not guarantees.")
-        else:
-            st.info("Sign-in for clients is being set up - please check back soon.")
-        with st.expander("Admin"):
-            with st.form("login"):
-                ident = st.text_input("Login")
-                pw = st.text_input("Password", type="password")
-                if st.form_submit_button("Log in", width="stretch"):
-                    locked = db.login_lock_minutes_left(ident)
-                    if locked:
-                        st.error(f"Too many wrong passwords. Try again in {locked} minute(s).")
-                        st.stop()
-                    user = db.login_user(ident, pw)
-                    if user and user["role"] == "admin":
-                        db.clear_login_failures(ident)
-                        start_session(user["id"])
-                        st.rerun()
-                    db.record_login_failure(ident)
-                    st.error("Wrong login or password.")
+        t_join, t_login = st.tabs(["Join free", "Log in"])
+    with t_join, st.form("join"):
+        phone = st.text_input("Phone number", placeholder="0772 123456")
+        pw = st.text_input("Choose a password (6+ characters)", type="password")
+        adult = st.checkbox("I'm 18+ and I understand tips are opinions, not guarantees.")
+        if st.form_submit_button("Join", type="primary", width="stretch"):
+            digits = db.normalize_phone(phone)
+            if len(digits) < 9:
+                st.error("Enter your phone number.")
+            elif len(pw) < 6:
+                st.error("The password needs at least 6 characters.")
+            elif not adult:
+                st.error("Please tick the 18+ box.")
+            else:
+                try:
+                    user = db.register_user(f"Client {digits[-4:]}", phone, pw)
+                except ValueError as exc:
+                    st.error(str(exc))
+                else:
+                    start_session(user["id"])
+                    st.rerun()
+    with t_login, st.form("login"):
+        ident = st.text_input("Phone number", placeholder="0772 123456")
+        pw = st.text_input("Password", type="password")
+        if st.form_submit_button("Log in", type="primary", width="stretch"):
+            locked = db.login_lock_minutes_left(ident)
+            if locked:
+                st.error(f"Too many wrong passwords. Try again in {locked} minute(s).")
+                st.stop()
+            user = db.login_user(ident, pw)
+            if user and user["role"] in ("admin", "subscriber"):
+                db.clear_login_failures(ident)
+                start_session(user["id"])
+                st.rerun()
+            db.record_login_failure(ident)
+            st.error("Wrong phone number or password.")
+    st.caption("[Privacy](?page=privacy) · [Terms](?page=terms)")
 
 
 # ---------------------------------------------------------------------------
@@ -885,8 +870,50 @@ def client_main(user):
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
+LEGAL_PAGES = {
+    "privacy": ("Privacy policy", """
+**What we collect.** Your phone number and a password (stored only as a secure scrambled code).
+
+**Why.** Only to create your account and let you sign in to see the daily tips and results.
+
+**Sharing.** We never sell or share your information with anyone.
+
+**Storage.** Your details are stored in our database (Supabase) until you ask us to delete your account.
+
+**Deleting your account.** Ask the DeBet admin and your account and data will be removed.
+
+**Cookies.** One cookie keeps you signed in on your device.
+"""),
+    "terms": ("Terms of service", """
+**18+ only.** You must be 18 or older to use DeBet.
+
+**Tips are opinions.** Tips, chances and accumulators are opinions based on analysis, never guarantees.
+Football is unpredictable and you can lose money.
+
+**Your responsibility.** You decide whether to bet and how much. Never bet more than you can afford to lose.
+DeBet is not responsible for any losses.
+
+**Accounts.** We may remove any account at any time.
+
+**Help.** If betting stops being fun, take a break and talk to someone you trust.
+"""),
+}
+
+
+def legal_page(page):
+    title, body = LEGAL_PAGES[page]
+    st.markdown('<div class="db-brand">DE<span>BET</span></div>', unsafe_allow_html=True)
+    st.markdown(f"## {title}")
+    st.markdown(body)
+    st.caption("[Back](/)")
+
+
 def main():
     st.markdown(THEME_CSS, unsafe_allow_html=True)
+    page = st.query_params.get("page")
+    if page in LEGAL_PAGES:  # public pages - no login needed
+        legal_page(page)
+        return
     user = current_user()
     inject_page_scripts()  # after current_user(), so the login cookie matches this run
     if not user:
