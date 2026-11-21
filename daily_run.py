@@ -1,6 +1,7 @@
 """Scheduled daily run (GitHub Actions, 13:00 Uganda time): read today's tips and analyse them.
 
 Source: TaifaTips (4 tips -> slots #1-#4). More sites can be added to SOURCES if they allow it.
+Before that, earlier days' pending tips are settled from API-Football's free results (results_api.py).
 Safe to run several times a day: each source is analysed at most once per day, and a source that hasn't
 posted yet is picked up by a later scheduled attempt. Tips already analysed by hand are skipped.
 Needs DATABASE_URL and OPENROUTER_API_KEY in the environment. Run by hand with:  python daily_run.py
@@ -17,6 +18,7 @@ load_dotenv()  # local runs read .env; on GitHub the secrets are already in the 
 
 import analysis_jobs as ajobs  # noqa: E402
 import database as db  # noqa: E402
+import results_api  # noqa: E402
 import tipster_site as ts  # noqa: E402
 import value_engine as ve  # noqa: E402
 from debate_engine import parse_tip  # noqa: E402
@@ -72,6 +74,11 @@ def main():
     if not db.using_postgres() and not os.environ.get("DEBET_DAILY_ALLOW_LOCAL"):  # the flag is for tests
         sys.exit("DATABASE_URL is not set to the Supabase database - stopping so nothing is saved locally.")
     db.init_db(seed_admin=False)
+
+    try:  # first settle earlier days' tips from the free results service (no AI)
+        results_api.settle_pending(today=today)
+    except Exception as exc:  # results must never stop today's analysis
+        print(f"Results step failed: {exc}")
 
     entries, found = collect(today)
     for _, done_key in found:  # mark first, so an overlapping retry can't pay twice
