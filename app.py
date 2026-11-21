@@ -832,12 +832,12 @@ def clients_tab():
 
 
 VIP_CSS = """<style>
-:root {--vip-gold:#D4AF37; --vip-gold-hi:#F6E7B0; --vip-ink:#0E0E13; --vip-head:#17130A; --vip-line:#D4AF3733;
-       --vip-muted:#B5AE98;}
-.vip-hero {background:radial-gradient(120% 140% at 0% 0%, #2A2008 0%, #0E0E13 62%); border:1px solid var(--vip-line);
+:root {--vip-gold:#34D399; --vip-gold-hi:#EAF2FF; --vip-blue:#93C5FD; --vip-ink:#0F1B2D; --vip-head:#0F2744;
+       --vip-line:#3B82F638; --vip-muted:#94A3B8;}  /* green accent, blue structure, navy surfaces */
+.vip-hero {background:linear-gradient(135deg, #0F2E57 0%, #0B1526 55%, #0B2A2A 100%); border:1px solid var(--vip-line);
   border-radius:18px; padding:18px 18px 16px; margin:4px 0 6px; position:relative; overflow:hidden;}
-.vip-hero:after {content:""; position:absolute; right:-40px; top:-40px; width:140px; height:140px; border-radius:50%;
-  background:radial-gradient(circle, #D4AF3730, transparent 70%);}
+.vip-hero:after {content:""; position:absolute; right:-40px; top:-40px; width:150px; height:150px; border-radius:50%;
+  background:radial-gradient(circle, #10B98133, transparent 70%);}
 .vip-kicker {font:700 .68rem Inter,sans-serif; letter-spacing:3px; color:var(--vip-gold); text-transform:uppercase;}
 .vip-title {font-family:'Barlow Condensed',sans-serif; font-weight:800; font-size:2.1rem; line-height:1;
   color:var(--vip-gold-hi); margin-top:4px;}
@@ -847,27 +847,27 @@ VIP_CSS = """<style>
 .vip-sec:after {content:""; flex:1; height:1px; background:linear-gradient(90deg, var(--vip-line), transparent);}
 .vip-table {width:100%; border-collapse:separate; border-spacing:0; background:var(--vip-ink);
   border:1px solid var(--vip-line); border-radius:14px; overflow:hidden; font-size:.9rem;}
-.vip-table th {background:var(--vip-head); color:var(--vip-gold); font:600 .66rem Inter,sans-serif;
+.vip-table th {background:var(--vip-head); color:var(--vip-blue); font:600 .66rem Inter,sans-serif;
   letter-spacing:1.5px; text-transform:uppercase; text-align:left; padding:10px; border-bottom:1px solid var(--vip-line);}
 .vip-table td {padding:12px 10px; border-bottom:1px solid #FFFFFF0F; color:#EDEDED; vertical-align:middle;}
 .vip-table tr:last-child td {border-bottom:none;}
 .vip-table th, .vip-table td {border-left:none !important; border-right:none !important; border-top:none !important;}
 .vip-table td.vip-sel {width:100%; word-break:break-word;}
-.vip-day td {background:#15151C; color:var(--vip-gold); font:700 .7rem Inter,sans-serif; letter-spacing:1.5px;
+.vip-day td {background:#0D213C; color:var(--vip-blue); font:700 .7rem Inter,sans-serif; letter-spacing:1.5px;
   text-transform:uppercase; padding:7px 10px !important;}
 [data-testid="stMarkdownContainer"]:has(.vip-table) {max-width:100%; overflow-x:auto;}
 .vip-table .num {text-align:right; font-variant-numeric:tabular-nums; white-space:nowrap;}
 .vip-table th.num {text-align:right;}
 .vip-sel b {display:block; color:#FFF; font-weight:600; line-height:1.25;}
 .vip-sel span {color:var(--vip-muted); font-size:.8rem;}
-.vip-odds {font-family:'Barlow Condensed',sans-serif; font-weight:700; font-size:1.2rem; color:var(--vip-gold-hi);}
+.vip-odds {font-family:'Barlow Condensed',sans-serif; font-weight:700; font-size:1.25rem; color:var(--vip-gold);}
 .vip-min {color:var(--vip-muted); font-size:.75rem;}
 .vip-badge {display:inline-block; padding:4px 8px; border-radius:999px; font:800 .62rem Inter,sans-serif;
   letter-spacing:1px; color:#111; white-space:nowrap;}
-.b-platinum {background:linear-gradient(135deg,#FFFFFF,#C9D3E3 50%,#8E9BB3);}
-.b-gold {background:linear-gradient(135deg,#FFF1B8,#D4AF37 55%,#A67C00);}
-.b-silver {background:linear-gradient(135deg,#F2F2F2,#BFC3C7 55%,#8D9297);}
-.b-acca {background:linear-gradient(135deg,#F3E8FF,#C4A7FF 55%,#8B5CF6);}
+.b-platinum {background:linear-gradient(135deg,#F0F9FF,#BAE6FD 50%,#7DD3FC);}
+.b-gold {background:linear-gradient(135deg,#FEF3C7,#FCD34D 55%,#F59E0B);}
+.b-silver {background:linear-gradient(135deg,#F8FAFC,#CBD5E1 55%,#94A3B8);}
+.b-acca {background:linear-gradient(135deg,#D1FAE5,#6EE7B7 55%,#10B981);}
 .vip-foot td {background:var(--vip-head); color:var(--vip-gold-hi); font-weight:600;}
 .vip-chips {display:grid; grid-template-columns:repeat(4, minmax(0,1fr)); gap:8px; margin:2px 0 12px;}
 .vip-chip {background:var(--vip-ink); border:1px solid var(--vip-line); border-radius:12px; padding:9px 10px;}
@@ -878,7 +878,7 @@ VIP_CSS = """<style>
 .r-void, .r-pend {color:var(--vip-muted);}
 .vip-empty {background:var(--vip-ink); border:1px dashed var(--vip-line); border-radius:14px; padding:22px;
   text-align:center; color:var(--vip-muted);}
-.vip-note {color:#8F8A7A; font-size:.72rem; margin-top:18px; text-align:center;}
+.vip-note {color:#64748B; font-size:.72rem; margin-top:18px; text-align:center;}
 @media (max-width: 480px) {.vip-table {font-size:.84rem;} .vip-table td, .vip-table th {padding:9px 7px;}
   .vip-chips {grid-template-columns:repeat(2, minmax(0,1fr));}}
 </style>"""
@@ -1023,7 +1023,7 @@ def client_bets_tab(user):
             running += b["net_profit"] or 0
             points.append({"Bet": len(points) + 1, "Profit": round(running, 2)})
         show('<div class="vip-sec">Profit over time</div>')
-        st.line_chart(pd.DataFrame(points).set_index("Bet"), height=180, color="#D4AF37")
+        st.line_chart(pd.DataFrame(points).set_index("Bet"), height=180, color="#34D399")
 
     if bets:
         tiers = {}
