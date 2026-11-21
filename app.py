@@ -5,7 +5,6 @@ The old multi-user/subscriber version is kept in archive/app_multiuser.py.
 
 import json
 import math
-import threading
 from datetime import date, datetime, timedelta, timezone
 
 import pandas as pd
@@ -113,13 +112,8 @@ EAT = timezone(timedelta(hours=3))
 @st.cache_resource
 def bootstrap():
     db.init_db()  # first start only: prints a generated admin password to the server console
-    state = {"startup_verification": None}
-
-    def _verify():  # background, throttled to once every 3 hours
-        state["startup_verification"] = rv.auto_verify_on_startup()
-
-    threading.Thread(target=_verify, daemon=True).start()
-    return state
+    # No automatic result check: results are entered by hand (or with the paid button in Results).
+    return {"startup_verification": None}
 
 
 BOOT = bootstrap()
@@ -755,8 +749,8 @@ def results_tab():
             st.session_state["last_verification"] = rv.verify_pending_tips(force=True)
         st.rerun()
     c[1].caption(f"Last check: {last.strftime('%d %b %H:%M UTC') if last else 'never'}. "
-                 "Also runs automatically (at most every 3 hours) when the app starts - for yesterday's and "
-                 "older matches only. Press the button to check today's finished games.")
+                 "Never runs on its own. The button looks up scores with AI (about $0.005 per match) - "
+                 "or just enter results yourself below for free.")
     summary = st.session_state.get("last_verification") or BOOT.get("startup_verification")
     if summary and not summary.get("skipped"):
         st.success(f"Checked {summary['checked']} · settled {len(summary['settled'])} · "
