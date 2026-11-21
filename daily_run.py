@@ -23,8 +23,8 @@ from debate_engine import parse_tip  # noqa: E402
 
 UGANDA = timezone(timedelta(hours=3))
 # (name, reader, settings key marking the last day it was analysed, tip group, slots)
-# BetMines is NOT read here: its Cloudflare protection refuses GitHub's servers (HTTP 403), and DeBet
-# doesn't try to get around that. Use the BetMines button in the app (or a screenshot) for slots #5-#7.
+# Only sites that allow it and don't block GitHub's servers. (BetMines refused with HTTP 403, so slots
+# #5-#7 are filled by hand.)
 SOURCES = [
     ("TaifaTips", lambda today: ts.read_tips(), "AUTO_RUN_DATE", 0, [1, 2, 3, 4]),
 ]
