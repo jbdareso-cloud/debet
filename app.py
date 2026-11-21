@@ -948,8 +948,134 @@ def vip_record(past):
     return f'<div class="vip-chips">{"".join(chips)}</div>'
 
 
+def _money_cell(v):
+    cls = "r-won" if v > 0 else "r-lost" if v < 0 else "r-void"
+    return f'<span class="{cls}">{fmt_signed(v)}</span>'
+
+
+def client_bets_tab(user):
+    """A client's own betting record on DeBet's picks: log bets, see if they're profitable."""
+    show = lambda h: st.markdown(h, unsafe_allow_html=True)
+    today = datetime.now(EAT).date().isoformat()
+    # what can still be bet on: published days from today on, picks whose matches haven't been played
+    options = {}
+    for d in db.list_published_days(10):
+        if d["day"] < today:
+            continue
+        for k, label in VIP_TIERS + (("acca", "🎟️ ACCUMULATOR"),):
+            sel = d.get(k)
+            if not sel:
+                continue
+            legs = sel["legs"] if k == "acca" else [sel]
+            if any((db.get_tip(l["tip_id"]) or {}).get("final_score") for l in legs):
+                continue
+            what = (f"{len(legs)} legs" if k == "acca" else f"{sel['match']} - {sel['market']}")
+            price = sel.get("odds") or sel.get("min_odds")
+            options[(d["day"], k)] = (f"{label} · {what}" + ("" if d["day"] == today else f" ({fmt_date(d['day'])})"),
+                                      price)
+
+    show('<div class="vip-sec">Log a bet</div>')
+    if not options:
+        show('<div class="vip-empty">When today\'s VIP tips are posted, you can log your bets on them here.</div>')
+    else:
+        choice = st.selectbox("Which tip did you bet on?", list(options), format_func=lambda o: options[o][0],
+                              key="cb_choice")
+        with st.form("client_bet", clear_on_submit=True):
+            c = st.columns(2)
+            stake = c[0].number_input("Stake", min_value=0.0, step=500.0, format="%.0f")
+            odds = c[1].number_input("Odds you got", min_value=1.01, max_value=10000.0, step=0.01, format="%.2f",
+                                     value=float(options[choice][1] or 1.5), key=f"cb_odds_{choice[0]}_{choice[1]}")
+            if st.form_submit_button("➕ Add bet", type="primary", width="stretch"):
+                try:
+                    db.place_client_bet(user["id"], choice[0], choice[1], stake, odds)
+                except ValueError as exc:
+                    st.error(str(exc))
+                else:
+                    st.toast("Bet added")
+                    st.rerun()
+
+    period = st.segmented_control("Period", ["7 days", "30 days", "All time"], default="30 days",
+                                  key="cb_period", label_visibility="collapsed") or "30 days"
+    days = {"7 days": 7, "30 days": 30, "All time": 36500}[period]
+    s = db.get_user_bankroll_stats(user["id"], days)
+    net = s["net_profit"]
+    if s["won"] + s["lost"]:
+        verdict = (f'<span class="r-won">In profit ✓</span>' if net > 0 else
+                   f'<span class="r-lost">Losing ✕</span>' if net < 0 else '<span class="r-void">Break-even</span>')
+    else:
+        verdict = '<span class="r-void">No settled bets yet</span>'
+    roi = f"{s['roi']:+.0f}%" if s["roi"] is not None else "—"
+    win_rate = f"{s['win_rate']:.0f}%" if s["win_rate"] is not None else "—"
+    chip = lambda title, value, sub: (f'<div class="vip-chip"><div class="t">{title}</div><div class="v">{value}</div>'
+                                      f'<div class="s">{sub}</div></div>')
+    show(f'<div class="vip-sec">My performance · {period.lower()}</div><div class="vip-chips">'
+         + chip("Profit", _money_cell(net), verdict)
+         + chip("Return", roi, f"on {fmt_money(s['settled_staked'])} staked")
+         + chip("Win rate", win_rate, f"{s['won']} won · {s['lost']} lost")
+         + chip("Open bets", s["pending"], f"{fmt_money(s['pending_staked'])} at stake")
+         + "</div>")
+
+    bets = db.list_user_bets(user["id"], days=None if days > 3650 else days)
+    settled = sorted((b for b in bets if b["status"] != "PENDING"), key=lambda b: b["created_at"])
+    if len(settled) >= 2:
+        running, points = 0.0, []
+        for b in settled:
+            running += b["net_profit"] or 0
+            points.append({"Bet": len(points) + 1, "Profit": round(running, 2)})
+        show('<div class="vip-sec">Profit over time</div>')
+        st.line_chart(pd.DataFrame(points).set_index("Bet"), height=180, color="#D4AF37")
+
+    if bets:
+        tiers = {}
+        for b in bets:
+            tier = (json.loads(b["legs"] or "[]") or [{}])[0].get("tier")
+            if tier and b["status"] in ("WON", "LOST", "VOID"):
+                t = tiers.setdefault(tier, [0, 0, 0.0])
+                t[0] += b["status"] == "WON"
+                t[1] += b["status"] == "LOST"
+                t[2] += b["net_profit"] or 0
+        if tiers:
+            rows = "".join(f'<tr><td>{_badge(k, db.CLIENT_TIER_NAMES[k] if k != "acca" else "ACCA")}</td>'
+                           f'<td class="num">{w}–{l}</td><td class="num">{_money_cell(p)}</td></tr>'
+                           for k in ("platinum", "gold", "silver", "acca") if k in tiers
+                           for w, l, p in [tiers[k]])
+            show('<div class="vip-sec">By tier</div><table class="vip-table"><tr><th>Tier</th>'
+                 f'<th class="num">Won–lost</th><th class="num">Profit</th></tr>{rows}</table>')
+
+        rows = []
+        for b in bets:
+            legs = json.loads(b["legs"] or "[]")
+            tier = (legs or [{}])[0].get("tier") or "single"
+            if tier == "acca":
+                title, market = f"Accumulator · {len(legs)} legs", ""
+            elif legs:
+                title, market = legs[0]["match"], f" · {legs[0]['market']}"
+            else:
+                title, market = b["selections_summary"], ""
+            when = datetime.fromisoformat(b["created_at"]).astimezone(EAT).strftime("%d %b")
+            result = (_money_cell(b["net_profit"]) if b["status"] in ("WON", "LOST")
+                      else VIP_RESULT["VOID" if b["status"] == "VOID" else None])
+            badge = _badge(tier, {"acca": "ACCA"}.get(tier, db.CLIENT_TIER_NAMES.get(tier, "BET")))
+            rows.append(f'<tr><td class="vip-sel"><b>{_e(title)}</b><span>{when}{_e(market)} · '
+                        f'{fmt_money(b["stake_amount"])} @ {b["total_odds"]:.2f}</span></td>'
+                        f'<td>{badge}</td><td class="num">{result}</td></tr>')
+        show('<div class="vip-sec">My bets</div><table class="vip-table"><tr><th>Bet</th><th>Tier</th>'
+             f'<th class="num">Result</th></tr>{"".join(rows)}</table>')
+
+        pending = [b for b in bets if b["status"] == "PENDING"]
+        if pending:
+            with st.expander("Remove an open bet (typo)"):
+                bid = st.selectbox("Bet", [b["id"] for b in pending], key="cb_rm",
+                                   format_func=lambda i: next(b["selections_summary"] for b in pending if b["id"] == i))
+                if st.button("🗑️ Remove", key="cb_rm_btn"):
+                    db.delete_user_bet(user["id"], bid)
+                    st.rerun()
+    else:
+        show('<div class="vip-empty" style="margin-top:12px">Your bets and profit will show here.</div>')
+
+
 def client_main(user):
-    """What a client sees, VIP style: today's tiers, the accumulator, the record and recent results."""
+    """What a client sees, VIP style: today's tips (record, results) and their own bets."""
     st.markdown(VIP_CSS, unsafe_allow_html=True)
     head, menu = st.container(key="topbar").columns([5, 1], vertical_alignment="center")
     head.markdown('<div class="db-brand">DE<span>BET</span></div>', unsafe_allow_html=True)
@@ -957,6 +1083,14 @@ def client_main(user):
         st.caption(f"Logged in as {user['full_name']}")
         if st.button("Log out", width="stretch"):
             logout()
+    t_tips, t_bets = st.tabs(["⭐ VIP Tips", "💰 My Bets"])
+    with t_bets:
+        client_bets_tab(user)
+    with t_tips:
+        client_tips(user)
+
+
+def client_tips(user):
     now = datetime.now(EAT)
     today = now.date().isoformat()
     days = db.list_published_days(30)
