@@ -31,7 +31,8 @@ import analysis_jobs as ajobs
 import result_verifier as rv
 import tipster_site as ts
 import value_engine as ve
-from debate_engine import format_cost
+import client_tiers as ct
+from debate_engine import format_cost, parse_tip
 
 st.set_page_config(page_title="DeBet", page_icon="⚽", layout="wide", initial_sidebar_state="collapsed")
 
@@ -155,7 +156,7 @@ def logout(rerun=True):
 
 
 def current_user():
-    """The logged-in admin, or None. Non-admin accounts (old subscribers) can't get in."""
+    """The logged-in user (admin = you, subscriber = a client), or None."""
     uid = st.session_state.get("user_id")
     if not uid and not st.session_state.get("logged_out"):
         token = st.context.cookies.get(SESSION_COOKIE)
@@ -167,7 +168,7 @@ def current_user():
         return None
     user = db.get_user(uid)
     token = st.session_state.get("session_token")
-    if not user or user["role"] != "admin" or (token and not db.get_session_user(token)):
+    if not user or user["role"] not in ("admin", "subscriber") or (token and not db.get_session_user(token)):
         logout(rerun=False)
         return None
     return user
@@ -175,10 +176,12 @@ def current_user():
 
 def login_page():
     st.markdown('<div class="db-brand">DE<span>BET</span></div>'
-                '<div class="db-kicker">Personal betting desk</div>', unsafe_allow_html=True)
+                '<div class="db-kicker">Daily football tips</div>', unsafe_allow_html=True)
     _, mid, _ = st.columns([1, 2, 1])
-    with mid, st.form("login"):
-        ident = st.text_input("Login", placeholder="admin@debet.local")
+    with mid:
+        t_login, t_join = st.tabs(["Log in", "Create account"])
+    with t_login, st.form("login"):
+        ident = st.text_input("Phone number (or email)", placeholder="0772 123456")
         pw = st.text_input("Password", type="password")
         if st.form_submit_button("Log in", type="primary", width="stretch"):
             locked = db.login_lock_minutes_left(ident)
@@ -186,13 +189,36 @@ def login_page():
                 st.error(f"Too many wrong passwords. Try again in {locked} minute(s).")
                 st.stop()
             user = db.login_user(ident, pw)
-            if user and user["role"] == "admin":
+            if user and user["role"] in ("admin", "subscriber"):
                 db.clear_login_failures(ident)
                 start_session(user["id"])
                 st.rerun()
             db.record_login_failure(ident)
-            st.error("Wrong login or password.")
-        st.caption("Forgot it? On your PC, run `set_admin_password.py` in the debet folder.")
+            st.error("Wrong phone number or password.")
+    with t_join, st.form("join"):
+        name = st.text_input("Your name")
+        phone = st.text_input("Phone number", placeholder="0772 123456")
+        p1 = st.text_input("Password (at least 8 characters)", type="password")
+        p2 = st.text_input("Repeat password", type="password")
+        adult = st.checkbox("I am 18 or older, and I understand betting is risky and tips are opinions, "
+                            "not guarantees.")
+        if st.form_submit_button("Create account", type="primary", width="stretch"):
+            if not adult:
+                st.error("You must be 18 or older and accept the risk notice.")
+            elif len(p1) < 8:
+                st.error("The password needs at least 8 characters.")
+            elif p1 != p2:
+                st.error("The passwords don't match.")
+            elif len(db.normalize_phone(phone)) < 9:
+                st.error("Enter a valid phone number.")
+            else:
+                try:
+                    user = db.register_user(name, phone, p1)
+                except ValueError as exc:
+                    st.error(str(exc))
+                else:
+                    start_session(user["id"])
+                    st.rerun()
 
 
 # ---------------------------------------------------------------------------
@@ -710,6 +736,139 @@ def results_tab():
 
 
 # ---------------------------------------------------------------------------
+# Client tiers: shared cards, your Clients tab, and the clients' own dashboard
+# ---------------------------------------------------------------------------
+TIERS = (("platinum", "💎 PLATINUM", "DeBet's best pick"), ("gold", "🥇 GOLD", "Second-best pick"),
+         ("silver", "🥈 SILVER", "Alternative pick"))
+OUTCOME_BADGE = {"WON": "✅ Won", "LOST": "❌ Lost", "VOID": "⚪ Void", None: "⏳ Pending"}
+
+
+def selection_text(sel):
+    price = (f"@ **{fmt_odds(sel['odds'])}**" if sel.get("odds")
+             else f"· take only at **{sel['min_odds']:.2f}+**" if sel.get("min_odds") else "")
+    chance = f" · chance {sel['chance']:.0%}" if sel.get("chance") is not None else ""
+    return f"**{sel['match']}**  \n{sel['market']} {price}{chance}"
+
+
+def tier_cards(day_data, show_results=False):
+    for key, title, sub in TIERS:
+        sel = day_data.get(key)
+        if not sel:
+            continue
+        with st.container(border=True):
+            result = f" · {OUTCOME_BADGE[ct.outcome(sel)]}" if show_results else ""
+            st.markdown(f"{title} :gray[· {sub}]{result}  \n{selection_text(sel)}")
+    acca = day_data.get("acca")
+    if acca:
+        with st.container(border=True):
+            result = f" · {OUTCOME_BADGE[ct.acca_outcome(acca)]}" if show_results else ""
+            legs = "  \n".join(f"• {l['match']} - **{l['market']}** ({l['chance']:.0%})" for l in acca["legs"])
+            st.markdown(f"🎟️ **ACCUMULATOR** :gray[· {len(acca['legs'])} legs]{result}  \n{legs}  \n"
+                        f"Chance all win: **{acca['chance']:.0%}** · worth it at combined odds "
+                        f"**{acca['min_odds']:.2f}+**")
+
+
+def clients_tab():
+    """You: enter your own picks for clients, check the tiers, publish them, see who signed up."""
+    st.caption("Only the picks you enter here are ever shown to clients. Each pick costs about $0.015 to analyse.")
+    job = db.latest_job()
+    if job and job["status"] == "running":
+        job_progress(job["id"])
+        return
+    day = st.date_input("Match day", datetime.now(EAT).date(), format="YYYY-MM-DD", key="client_day").isoformat()
+    with st.form("my_picks", clear_on_submit=True):
+        text = st.text_area("My picks (one per line, with odds)", height=130,
+                            placeholder="Arsenal vs Chelsea over 2.5 1.95\nRoma vs Lazio 1 2.10")
+        go = st.form_submit_button("⚔️ Analyse my picks", type="primary")
+    if go:
+        lines = [l.strip() for l in text.splitlines() if l.strip()]
+        bad, parsed = [], []
+        for line in lines:
+            try:
+                parsed.append((line, parse_tip(line)))
+            except ValueError as exc:
+                bad.append(f"`{line}`: {exc}")
+        if bad:
+            st.error("Fix these first:\n\n" + "\n\n".join(bad))
+        elif parsed:
+            dupes = db.find_duplicates([(p["match_name"], p["market"]) for _, p in parsed])
+            fresh = [{"line": l, "group": db.TIP_GROUPS[1], "slot_number": 5 + i}
+                     for i, (l, p) in enumerate(parsed) if (p["match_name"].lower(), p["market"].lower()) not in dupes]
+            if dupes:
+                st.warning(f"{len(parsed) - len(fresh)} pick(s) were already analysed recently and were skipped.")
+            if fresh:
+                ajobs.start(fresh, "", day)
+                st.rerun()
+
+    built = ct.build_day(day)
+    saved = db.get_client_day(day)
+    st.markdown(f"#### Tiers for {fmt_date(day)}")
+    if not built:
+        st.info("No analysed picks of yours for this day yet.")
+    else:
+        status = ("🟢 **Published** - clients can see it." if saved and saved.get("published_at")
+                  else "📝 **Draft** - clients can't see it yet.")
+        st.markdown(f"{status} Based on {built['picks']} pick(s).")
+        tier_cards(built)
+        c = st.columns(2)
+        if c[0].button("📣 Publish to clients" if not (saved and saved.get("published_at")) else "🔄 Update published",
+                       type="primary", width="stretch"):
+            db.save_client_day(day, built, publish=True)
+            st.rerun()
+        if saved and saved.get("published_at") and c[1].button("🙈 Unpublish", width="stretch"):
+            db.save_client_day(day, saved, publish=False)
+            st.rerun()
+
+    clients = db.list_users("subscriber")
+    with st.expander(f"👥 Clients ({len(clients)})"):
+        for u in clients:
+            c = st.columns([3, 1], vertical_alignment="center")
+            c[0].markdown(f"**{u['full_name']}** · {u['phone_number']}  \n:gray[joined {fmt_date(u['created_at'])}]")
+            if c[1].button("Remove", key=f"rm_{u['id']}"):
+                db.delete_client(u["id"])
+                st.rerun()
+        if not clients:
+            st.caption("Nobody has signed up yet.")
+
+
+def client_main(user):
+    """What a client sees: today's tiers, the accumulator, and recent results. Nothing else."""
+    head, menu = st.container(key="topbar").columns([5, 1], vertical_alignment="center")
+    head.markdown('<div class="db-brand">DE<span>BET</span></div>', unsafe_allow_html=True)
+    with menu.popover("⚙️", width="stretch"):
+        st.caption(f"Logged in as {user['full_name']}")
+        if st.button("Log out", width="stretch"):
+            logout()
+    today = datetime.now(EAT).date().isoformat()
+    days = db.list_published_days(30)
+    current = min((d for d in days if d["day"] >= today), key=lambda d: d["day"], default=None)
+    st.markdown(f"### Today's tips · {datetime.now(EAT):%A %d %B}")
+    if current:
+        if current["day"] != today:
+            st.caption(f"For {fmt_date(current['day'])}")
+        tier_cards(current)
+    else:
+        st.info("Today's tips will appear here once they're ready.")
+
+    past = [d for d in days if d["day"] < today]
+    st.markdown("### Recent results")
+    summary = []
+    for k, title, _ in TIERS + (("acca", "🎟️ ACCA", ""),):
+        results = [ct.acca_outcome(d.get(k)) if k == "acca" else ct.outcome(d.get(k)) for d in past]
+        won, lost = results.count("WON"), results.count("LOST")
+        if won + lost:
+            summary.append(f"{title} {won}/{won + lost}")
+    if summary:
+        st.caption("Won / settled, last 30 days: " + " · ".join(summary))
+    for d in past[:14]:
+        with st.expander(f"{fmt_date(d['day'])}"):
+            tier_cards(d, show_results=True)
+    if not past:
+        st.caption("Results will appear here after the first tips are settled.")
+    st.caption("18+ only. Tips are opinions, not guarantees - never bet more than you can afford to lose.")
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 def main():
@@ -718,6 +877,9 @@ def main():
     inject_page_scripts()  # after current_user(), so the login cookie matches this run
     if not user:
         login_page()
+        return
+    if user["role"] != "admin":  # clients only ever get the client dashboard
+        client_main(user)
         return
 
     head, menu = st.container(key="topbar").columns([5, 1], vertical_alignment="center")
@@ -747,11 +909,13 @@ def main():
         if st.button("Log out", width="stretch"):
             logout()
 
-    t1, t2, t3, t4 = st.tabs(["📊 Dashboard", "⚔️ Analyse", "💰 My Bets", "✅ Results"])
+    t1, t2, t5, t3, t4 = st.tabs(["📊 Dashboard", "⚔️ Analyse", "👥 Clients", "💰 My Bets", "✅ Results"])
     with t1:
         dashboard(user)
     with t2:
         analyse_tab()
+    with t5:
+        clients_tab()
     with t3:
         bets_tab(user)
     with t4:
