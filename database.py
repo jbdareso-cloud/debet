@@ -591,6 +591,41 @@ def register_user(full_name, phone_number, password, email=None):
     return get_user(user_id)
 
 
+GOOGLE_PHONE_PREFIX = "google:"  # Google accounts have no phone; this keeps the required column unique
+BLOCKED_KEY = "BLOCKED_EMAILS"   # settings key: emails of removed clients, so Google can't recreate them
+
+
+def google_user(email, full_name=None):
+    """The account for a Google-verified email: found, or created as a client (never an admin).
+    No password is set - Google accounts can only sign in through Google."""
+    email = (email or "").strip().lower()
+    if not email:
+        raise ValueError("Google didn't share an email address.")
+    if email in json.loads(get_setting(BLOCKED_KEY, "[]")):
+        raise ValueError("This account has been removed.")
+    with get_connection() as conn:
+        row = conn.execute(f"SELECT {_PUBLIC_USER_COLS} FROM users WHERE email = ? COLLATE NOCASE",
+                           (email,)).fetchone()
+    if row:
+        return dict(row)
+    now = _now()
+    try:
+        with get_connection() as conn:
+            cur = conn.execute(
+                """INSERT INTO users (full_name, email, phone_number, password_hash, role,
+                                      subscription_tier, trial_start_date, subscription_expiry, created_at)
+                   VALUES (?, ?, ?, ?, 'subscriber', ?, ?, ?, ?)""",
+                ((full_name or email.split("@")[0]).strip(), email, GOOGLE_PHONE_PREFIX + email,
+                 "google-only$" + secrets.token_hex(16), TRIAL_TIER, _iso(now),
+                 _iso(now + timedelta(days=TRIAL_DAYS)), _iso(now)))
+            user_id = cur.lastrowid
+    except Exception as exc:
+        if not is_unique_violation(exc):
+            raise
+        return google_user(email)  # created at the same moment by another tab
+    return get_user(user_id)
+
+
 def login_user(phone_or_email, password):
     """Log in by phone number (subscribers) or email (e.g. the admin's admin@debet.local).
 
@@ -975,7 +1010,14 @@ def list_published_days(limit=30):
 
 
 def delete_client(user_id):
-    """Remove a client account (never an admin) and log it out everywhere."""
+    """Remove a client account (never an admin), log it out everywhere, and stop its Google email
+    from signing up again."""
+    user = get_user(user_id)
+    if not user or user["role"] != "subscriber":
+        return False
+    if user.get("email"):
+        blocked = set(json.loads(get_setting(BLOCKED_KEY, "[]"))) | {user["email"].lower()}
+        update_setting(BLOCKED_KEY, json.dumps(sorted(blocked)))
     with get_connection() as conn:
         conn.execute("DELETE FROM sessions WHERE user_id = ?", (user_id,))
         return conn.execute("DELETE FROM users WHERE id = ? AND role = 'subscriber'", (user_id,)).rowcount == 1
