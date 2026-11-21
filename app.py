@@ -506,12 +506,9 @@ def screenshot_box():
     """Upload the tipster's screenshot(s); Claude reads the table and fills the slots for you to check."""
     with st.expander("🌐📸 Fill the slots from TaifaTips or a screenshot",
                      expanded=not st.session_state.get("shot_rows")):
-        b = st.columns(2)
         sites = []
-        if b[0].button("🌐 TaifaTips → #1–#4 (free)", key="site_read", width="stretch"):
+        if st.button("🌐 Get today's tips from TaifaTips → #1–#4 (free)", key="site_read", width="stretch"):
             sites.append(("TaifaTips", ts.read_tips, "Tipster's slots (#1–#4)"))
-        if b[1].button("🌐 BetMines → #5–#7 (free)", key="betmines_read", width="stretch"):
-            sites.append(("BetMines", lambda: ts.read_betmines(datetime.now(EAT).date()), "My slots (#5–#7)"))
         for name, reader, slots_label in sites:
             with st.spinner(f"Reading {name}..."):
                 try:
@@ -558,7 +555,7 @@ def screenshot_box():
             st.markdown(("⚠️ " if r["error"] else "✅ ") + f"`{r['line']}`" + (f" - {r['error']}" if r["error"] else ""))
         for u in found["unreadable"]:
             st.caption(f"Couldn't read clearly: {u}")
-        if found.get("source") in ("TaifaTips", "BetMines"):
+        if found.get("source") == "TaifaTips":
             st.caption(f"💡 These are {found['source']}' odds. After filling, change each to **your bookmaker's** "
                        "price - value depends on the odds you actually get.")
         good = [r for r in picked if not r["error"]]
