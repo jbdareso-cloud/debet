@@ -906,18 +906,17 @@ def _odds_cell(sel):
 
 
 def vip_today_table(day):
-    rows = "".join(f"<tr><td>{_badge(k, label)}</td>{_sel_cell(day[k])}{_odds_cell(day[k])}"
-                   f'<td class="num">{day[k]["chance"]:.0%}</td></tr>' for k, label in VIP_TIERS if day.get(k))
-    return ('<table class="vip-table"><tr><th>Tier</th><th>Selection</th><th class="num">Odds</th>'
-            f'<th class="num">Chance</th></tr>{rows}</table>')
+    rows = "".join(f"<tr><td>{_badge(k, label)}</td>{_sel_cell(day[k])}{_odds_cell(day[k])}</tr>"
+                   for k, label in VIP_TIERS if day.get(k))
+    return ('<table class="vip-table"><tr><th>Tier</th><th>Selection</th><th class="num">Odds</th></tr>'
+            f'{rows}</table>')
 
 
 def vip_acca_table(acca):
-    rows = "".join(f'<tr><td class="num">{i}</td>{_sel_cell(l)}<td class="num">{l["chance"]:.0%}</td></tr>'
-                   for i, l in enumerate(acca["legs"], 1))
-    return ('<table class="vip-table"><tr><th class="num">Leg</th><th>Selection</th><th class="num">Chance</th></tr>'
-            f'{rows}<tr class="vip-foot"><td></td><td>All {len(acca["legs"])} legs win · take combined odds '
-            f'<b>{acca["min_odds"]:.2f}+</b></td><td class="num">{acca["chance"]:.0%}</td></tr></table>')
+    rows = "".join(f'<tr><td class="num">{i}</td>{_sel_cell(l)}</tr>' for i, l in enumerate(acca["legs"], 1))
+    return ('<table class="vip-table"><tr><th class="num">Leg</th><th>Selection</th></tr>'
+            f'{rows}<tr class="vip-foot"><td></td><td>Take combined odds <b>{acca["min_odds"]:.2f}+</b></td></tr>'
+            '</table>')
 
 
 def vip_results_table(past):
