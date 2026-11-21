@@ -770,7 +770,9 @@ def tier_cards(day_data, show_results=False):
 
 def clients_tab():
     """You: enter your own picks for clients, check the tiers, publish them, see who signed up."""
-    st.caption("Only the picks you enter here are ever shown to clients. Each pick costs about $0.015 to analyse.")
+    st.caption("Type your picks and press Analyse - when the analysis finishes (1-2 minutes) the Platinum, Gold, "
+               "Silver and accumulator go live to clients automatically. Only these picks are ever shown to "
+               "clients. Each pick costs about $0.015 to analyse.")
     job = db.latest_job()
     if job and job["status"] == "running":
         job_progress(job["id"])
@@ -806,17 +808,16 @@ def clients_tab():
     if not built:
         st.info("No analysed picks of yours for this day yet.")
     else:
-        status = ("🟢 **Published** - clients can see it." if saved and saved.get("published_at")
-                  else "📝 **Draft** - clients can't see it yet.")
-        st.markdown(f"{status} Based on {built['picks']} pick(s).")
-        tier_cards(built)
-        c = st.columns(2)
-        if c[0].button("📣 Publish to clients" if not (saved and saved.get("published_at")) else "🔄 Update published",
-                       type="primary", width="stretch"):
-            db.save_client_day(day, built, publish=True)
-            st.rerun()
-        if saved and saved.get("published_at") and c[1].button("🙈 Unpublish", width="stretch"):
+        live = bool(saved and saved.get("published_at"))
+        st.markdown(("🟢 **Live for clients** - published automatically when your picks finished analysing."
+                     if live else "🙈 **Hidden from clients.**") + f" Based on {built['picks']} pick(s).")
+        tier_cards(saved if live else built)
+        if live and st.button("🙈 Hide from clients", width="stretch",
+                              help="Emergency only. Analysing new picks for this day shows it again."):
             db.save_client_day(day, saved, publish=False)
+            st.rerun()
+        if not live and st.button("📣 Show to clients again", width="stretch"):
+            db.save_client_day(day, built, publish=True)
             st.rerun()
 
     clients = db.list_users("subscriber")
