@@ -260,8 +260,8 @@ def dashboard(user):
     c[0].metric("Profit · 30d", fmt_signed(money["net_profit"]),
                 f"ROI {money['roi']:+.1f}%" if money["roi"] is not None else None,
                 help="From the bets you logged in My Bets (settled slips only).")
-    c[1].metric("Tipster", f"{tipster['win_rate']:.0f}%" if tipster["settled"] else "—",
-                units(tipster), help="Every tipster tip from the last 30 days, 1 unit each at their odds.")
+    c[1].metric("Daily tips", f"{tipster['win_rate']:.0f}%" if tipster["settled"] else "—",
+                units(tipster), help="Every daily tip from the last 30 days, 1 unit each at the listed odds.")
     c[2].metric("AI best pick", f"{best['win_rate']:.0f}%" if best["settled"] else "—", units(best),
                 help="Win rate of the one tip a day the AI picked as best value (or none), 1 unit each.")
     spend, calls = db.ai_spend(since_month_start=True)
@@ -314,7 +314,7 @@ def dashboard(user):
                    "are regularly above the closing odds, that's the earliest sign of a real edge - long before "
                    "profit can prove it.")
     else:
-        names = {"tipster": "Tipster's listed odds", "mine": "My own picks", "my_bets": "Odds I actually got"}
+        names = {"tipster": "Listed odds", "mine": "My own picks", "my_bets": "Odds I actually got"}
         st.dataframe(pd.DataFrame([{"Odds": names[k], "Average vs closing": (f"{v[0]:+.1f}%" if v[1] else "—"),
                                     "Tips": v[1]} for k, v in clv.items()]), hide_index=True, width="stretch")
         st.caption("Positive = better than the market's final price (good). Consistently negative = no edge.")
@@ -335,7 +335,7 @@ def dashboard(user):
 # 2. Analyse (AI debate)
 # ---------------------------------------------------------------------------
 def start_todays_run(today):
-    """Read today's TaifaTips tips and start their analysis now (same as the 13:00 automatic run)."""
+    """Read today's tips and start their analysis now (same as the 13:00 scheduled run)."""
     try:
         rows, _ = ts.read_tips()
     except RuntimeError as exc:
@@ -343,7 +343,7 @@ def start_todays_run(today):
         return
     todays = [r for r in rows if r["date"] == today and not r["error"]][:4]
     if not todays:
-        st.warning("TaifaTips hasn't posted today's tips yet - try again later.")
+        st.warning("Today's tips aren't posted yet - try again later.")
         return
     entries = [{"line": r["line"], "group": db.TIP_GROUPS[0], "slot_number": n} for n, r in enumerate(todays, 1)]
     db.update_setting("AUTO_RUN_DATE", today)  # the 13:00 automatic run then knows today is done
@@ -352,9 +352,6 @@ def start_todays_run(today):
 
 
 def analyse_tab():
-    st.caption("Every day at 13:00 (Uganda time) DeBet reads TaifaTips' 4 tips and analyses them automatically. "
-               "Grok and Claude each start from the market price and adjust it for the latest data; DeBet then "
-               "names 🏆 the tip most likely to win, plus one alternative.")
     job = db.latest_job()
     if job and job["status"] == "running":
         job_progress(job["id"])
@@ -364,10 +361,9 @@ def analyse_tab():
     if any(str(t.get("match_date"))[:10] == today for t in job_tips):
         job_summary(job)
         return
-    st.info("⏳ **Today's tips haven't been analysed yet.** It happens automatically at 13:00 "
-            "(retries at 14:30 and 16:00 if TaifaTips posts late).")
-    if st.button("▶️ Analyse today's TaifaTips tips now", width="stretch"):
-        with st.spinner("Reading TaifaTips..."):
+    st.info("⏳ **Today's tips haven't been analysed yet.** They'll be ready after 13:00.")
+    if st.button("▶️ Analyse today's tips now", width="stretch"):
+        with st.spinner("Getting today's tips..."):
             start_todays_run(today)
     if job:
         st.markdown("#### Previous analysis")
