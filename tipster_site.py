@@ -105,13 +105,12 @@ def _fetch(url, site):
                 raw = gzip.decompress(raw)
             return raw.decode("utf-8", errors="replace")
     except Exception as exc:
-        raise RuntimeError(f"Couldn't open {site} ({exc}). Use a screenshot instead.") from exc
+        raise RuntimeError(f"Couldn't open {site} ({exc}). Try again later.") from exc
 
 
 def read_tips():
     """TaifaTips: fetch the page once and return (rows, problems). Raises RuntimeError if it can't be read."""
-    rows = parse_page(_fetch(URL, "TaifaTips"))
+    rows = parse_page(_fetch(URL, "the tips page"))
     if not rows:
-        raise RuntimeError("TaifaTips opened, but no tips table was found - the page layout may have "
-                           "changed. Use a screenshot instead.")
+        raise RuntimeError("The tips page opened, but no tips table was found - its layout may have changed.")
     return rows, []
