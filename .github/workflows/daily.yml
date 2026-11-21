@@ -1,0 +1,31 @@
+# Daily automatic analysis of the 4 TaifaTips tips (see daily_run.py).
+# 13:00 Uganda time = 10:00 UTC. Two later tries (14:30, 16:00 Uganda) only do work if the tips
+# weren't posted yet - daily_run.py never analyses the same day twice.
+name: Daily tips analysis
+
+on:
+  schedule:
+    - cron: "0 10 * * *"
+    - cron: "30 11 * * *"
+    - cron: "0 13 * * *"
+  workflow_dispatch: {}   # "Run workflow" button on GitHub, for a manual run
+
+concurrency:
+  group: daily-run
+  cancel-in-progress: false
+
+jobs:
+  analyse:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - run: python daily_run.py
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
