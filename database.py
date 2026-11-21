@@ -434,6 +434,11 @@ CREATE TABLE IF NOT EXISTS ai_costs (
     usd    REAL NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_ai_costs_at ON ai_costs (at);
+CREATE TABLE IF NOT EXISTS client_days (
+    day           TEXT PRIMARY KEY,           -- match day, YYYY-MM-DD
+    data          TEXT NOT NULL,              -- JSON from client_tiers.build_day
+    published_at  TEXT                        -- NULL = draft, only the admin sees it
+);
 """
 
 JOB_STALE_MINUTES = 20      # a "running" analysis older than this was interrupted (e.g. the server restarted)
@@ -947,6 +952,35 @@ def get_clv_stats(user_id, days=PERFORMANCE_WINDOW_DAYS):
 
 
 # --- Backup ------------------------------------------------------------------------------------------
+# --- Client tiers (Platinum / Gold / Silver + accumulator) -----------------------------------------
+def save_client_day(day, data, publish):
+    """Store a day's tiers; publish=True makes them visible to clients (False keeps/sets a draft)."""
+    with get_connection() as conn:
+        conn.execute("DELETE FROM client_days WHERE day = ?", (day,))
+        conn.execute("INSERT INTO client_days (day, data, published_at) VALUES (?, ?, ?)",
+                     (day, json.dumps(data), _iso(_now()) if publish else None))
+
+
+def get_client_day(day):
+    with get_connection() as conn:
+        row = conn.execute("SELECT * FROM client_days WHERE day = ?", (day,)).fetchone()
+    return {**json.loads(row["data"]), "published_at": row["published_at"]} if row else None
+
+
+def list_published_days(limit=30):
+    with get_connection() as conn:
+        rows = conn.execute("SELECT * FROM client_days WHERE published_at IS NOT NULL ORDER BY day DESC LIMIT ?",
+                            (limit,)).fetchall()
+    return [{**json.loads(r["data"]), "published_at": r["published_at"]} for r in rows]
+
+
+def delete_client(user_id):
+    """Remove a client account (never an admin) and log it out everywhere."""
+    with get_connection() as conn:
+        conn.execute("DELETE FROM sessions WHERE user_id = ?", (user_id,))
+        return conn.execute("DELETE FROM users WHERE id = ? AND role = 'subscriber'", (user_id,)).rowcount == 1
+
+
 def export_backup_zip():
     """A .zip (bytes) with tips, bets, settings and AI costs as CSV files. Passwords are not included."""
     import csv
