@@ -1260,11 +1260,60 @@ def delete_user_bet(user_id, bet_id):
 
 
 def _leg_result(leg, tips):
-    """Result of one leg from the tips table. A leg whose tip was deleted counts as VOID (1.00)."""
+    """Result of one leg from the tips table. A leg whose tip was deleted counts as VOID (1.00).
+    Client legs carry a market_key (a published tier may use another market on the tip's match) and are
+    settled from the match's final score."""
     tip = tips.get(leg["tip_id"])
     if not tip:
         return "VOID"
+    if leg.get("market_key"):
+        if tip["result"] == "VOID":
+            return "VOID"
+        if not tip.get("final_score"):
+            return "PENDING"
+        from client_tiers import settle_key  # here: client_tiers imports this module
+        return settle_key(leg["market_key"], tip["final_score"]) or "PENDING"
     return tip["alt_result"] if leg.get("use") == "alternative" else tip["result"]
+
+
+CLIENT_TIER_NAMES = {"platinum": "PLATINUM", "gold": "GOLD", "silver": "SILVER", "acca": "ACCUMULATOR"}
+
+
+def place_client_bet(user_id, day, tier, stake_amount, odds_taken):
+    """A client logs a bet on one of a published day's picks: 'platinum' / 'gold' / 'silver' (a single)
+    or 'acca' (the accumulator, at the combined odds they got). Raises ValueError if invalid."""
+    data = get_client_day(day)
+    if not data or not data.get("published_at"):
+        raise ValueError("Those tips aren't available.")
+    if tier not in CLIENT_TIER_NAMES or not data.get(tier):
+        raise ValueError("Pick one of the day's tips.")
+    sources = data[tier]["legs"] if tier == "acca" else [data[tier]]
+    try:
+        stake, odds = _money(stake_amount), float(odds_taken)
+    except (TypeError, ValueError):
+        raise ValueError("Enter your stake and odds as numbers.") from None
+    if stake <= 0:
+        raise ValueError("Stake must be greater than 0.")
+    if not 1.0 < odds <= 10000:
+        raise ValueError("Odds must be greater than 1.00.")
+    for s in sources:
+        tip = get_tip(s["tip_id"])
+        if not tip or tip.get("final_score") or tip["result"] != "PENDING":
+            raise ValueError(f"{s['match']} has already been played.")
+    leg_odds = round(odds ** (1 / len(sources)), 4)  # an acca's price is shared evenly across its legs
+    legs = [{"tip_id": s["tip_id"], "use": "client", "market_key": s["market_key"], "match": s["match"],
+             "market": s["market"], "odds": leg_odds, "tier": tier} for s in sources]
+    summary = (f"{CLIENT_TIER_NAMES[tier]}: " + " + ".join(f"{l['match']} - {l['market']}" for l in legs)
+               + f" @ {odds:.2f}")
+    with get_connection() as conn:
+        cur = conn.execute(
+            """INSERT INTO user_bets (user_id, created_at, bet_type, tip_ids, legs, selections_summary,
+                                      total_odds, stake_amount, potential_payout, status, net_profit)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'PENDING', NULL)""",
+            (user_id, _iso(_now()), BET_TYPES[len(legs)], json.dumps([l["tip_id"] for l in legs]),
+             json.dumps(legs), summary, round(odds, 2), stake, _money(stake * odds)))
+        bet_id = cur.lastrowid
+    return get_user_bet(bet_id)
 
 
 def grade_slip(stake, legs_with_results):
@@ -1303,7 +1352,7 @@ def recalculate_user_bets(tip_ids=None):
         needed = {leg["tip_id"] for b in bets for leg in json.loads(b["legs"] or "[]")}
         marks = ",".join("?" * len(needed)) or "NULL"
         tips = {r["id"]: dict(r) for r in conn.execute(
-            f"SELECT id, result, alt_result FROM tips WHERE id IN ({marks})", list(needed))}
+            f"SELECT id, result, alt_result, final_score FROM tips WHERE id IN ({marks})", list(needed))}
         for b in bets:
             legs = json.loads(b["legs"] or "[]")
             if not legs:  # defensive: price-less slip built only from tip_ids
