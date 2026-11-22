@@ -70,21 +70,22 @@ def find_game(match_name, games):
     return None
 
 
-def settle_pending(key=None, today=None, log=print):
-    """Settle pending tips whose match day is before today (Uganda time). Returns the number settled."""
+def settle_pending(key=None, today=None, log=print, include_today=False, lookback=LOOKBACK_DAYS):
+    """Settle pending tips from the last `lookback` days (Uganda time); with include_today also today's
+    matches that have already finished (only full-time scores are ever used). Returns the number settled."""
     key = key or os.environ.get("API_FOOTBALL_KEY", "").strip()
     if not key:
         log("Results: no API_FOOTBALL_KEY set - skipping.")
         return 0
     today = today or datetime.now(UGANDA).date()
-    oldest = today - timedelta(days=LOOKBACK_DAYS)
+    oldest = today - timedelta(days=lookback)
     by_day = {}
     for t in db.list_tips(result="PENDING", limit=200):
         try:
             day = date.fromisoformat(str(t.get("match_date"))[:10])
         except ValueError:
             continue
-        if oldest <= day < today:
+        if oldest <= day < today or (include_today and day == today):
             by_day.setdefault(day, []).append(t)
     settled = 0
     for day, tips in sorted(by_day.items()):
@@ -136,6 +137,10 @@ if __name__ == "__main__":  # python results_api.py --check [YYYY-MM-DD]
     import sys
     from dotenv import load_dotenv
     load_dotenv()
-    if "--check" in sys.argv:
+    if "--settle" in sys.argv:  # the hourly evening job: today's finished matches and yesterday's leftovers
+        if not db.using_postgres():
+            raise SystemExit("DATABASE_URL is not set to the Supabase database.")
+        settle_pending(include_today=True, lookback=1)
+    elif "--check" in sys.argv:
         extra = [a for a in sys.argv[1:] if re.fullmatch(r"\d{4}-\d{2}-\d{2}", a)]
         check(date.fromisoformat(extra[0]) if extra else None)
