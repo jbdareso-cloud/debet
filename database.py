@@ -587,7 +587,7 @@ def register_user(full_name, phone_number, password, email=None):
     except Exception as exc:
         if not is_unique_violation(exc):
             raise
-        raise ValueError("An account with that phone number already exists. Please log in instead.") from exc
+        raise ValueError("This phone number already has an account - tap 'Log in instead' below.") from exc
     return get_user(user_id)
 
 
