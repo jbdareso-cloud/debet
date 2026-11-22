@@ -32,7 +32,7 @@ def run_now(entries, notes, default_date):
 
 def publish_client_days(tip_ids):
     """Clients' tiers go live automatically: rebuild and publish Platinum / Gold / Silver and the accumulator
-    for every match day analysed in this run (the 13:00 run, or picks added by hand)."""
+    for every match day analysed in this run (the hourly scheduled run, or picks added by hand)."""
     import client_tiers as ct  # here, to keep this module light for the scheduled run
     days = {str(t.get("match_date"))[:10] for t in (db.get_tip(i) for i in tip_ids)
             if t and t.get("match_date")}
