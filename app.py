@@ -381,7 +381,52 @@ def dashboard(user):
                    "~100 tips, the AI isn't adding information. If one model is clearly better, keep only it "
                    "to halve the cost.")
 
+    weekly_report()
     monthly_report()
+
+
+def weekly_report():
+    """Every 7 days (Monday-Sunday): how the daily tips did, their best market, and how DeBet's picks did."""
+    st.markdown("#### 🗓️ Weekly summary")
+    weeks = reports.weeks()
+    if not weeks:
+        st.caption("Shows once daily tips have been analysed.")
+        return
+    label = lambda m: f"{m:%d %b} – {m + timedelta(days=6):%d %b}"
+    monday = st.selectbox("Week", weeks, format_func=label, key="report_week", label_visibility="collapsed")
+    w = reports.weekly(monday)
+    st.caption("✅ Week complete" if w["complete"] else "⏳ Week in progress - final summary after Sunday")
+    t, best = w["daily"]["total"], w["daily"]["best"]
+    ai = w["ai_total"]
+    c = st.columns(2)
+    with c[0], st.container(border=True):
+        st.markdown(":gray[**DAILY TIPS**]")
+        rate = f" ({t['win_rate']:.0%})" if t["win_rate"] is not None else ""
+        st.markdown(f"**{t['won']} won – {t['lost']} lost**{rate}  \n"
+                    f"Profit **{t['profit']:+.2f}u**" + (f" · ROI {t['roi']:+.0%}" if t["roi"] is not None else "")
+                    + (f"  \n:gray[{t['pending']} still pending]" if t["pending"] else ""))
+        if best:
+            st.markdown(f"🏆 Best market: **{best['market']}**  \n:gray[{best['won']}/{best['settled']} won · "
+                        f"{best['profit']:+.2f}u]")
+        else:
+            st.caption(f"Best market needs {reports.MIN_FOR_BEST_WEEK}+ settled tips in one market.")
+    with c[1], st.container(border=True):
+        st.markdown(":gray[**DEBET (AI)**]")
+        settled = ai["won"] + ai["lost"]
+        st.markdown(f"**{ai['won']} won – {ai['lost']} lost**"
+                    + (f" ({ai['won'] / settled:.0%})" if settled else "") + f"  \nProfit **{ai['profit']:+.2f}u**")
+        for k, title, _ in TIERS + (("acca", "🎟️ ACCA", ""),):
+            r = w["tiers"][k]
+            if r["picks"]:
+                st.markdown(f"{title.split()[0]} {k.title() if k != 'acca' else 'Accumulator'}: "
+                            f"{r['won']}–{r['lost']} · {r['profit']:+.2f}u")
+    if t["settled"] and settled:
+        diff = ai["profit"] - t["profit"]
+        who = "DeBet's picks" if diff > 0 else "The daily tips"
+        if abs(diff) >= 0.01:
+            st.info(f"This week **{who}** did better, by **{abs(diff):.2f} units**.")
+    st.caption("Units = 1 unit per tip at its odds. DeBet total = Platinum + Gold + Silver (accumulator shown "
+               "separately).")
 
 
 def monthly_report():
