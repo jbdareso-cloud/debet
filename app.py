@@ -33,6 +33,7 @@ import result_verifier as rv
 import tipster_site as ts
 import value_engine as ve
 import client_tiers as ct
+import reports
 from debate_engine import format_cost, parse_tip
 
 st.set_page_config(page_title="DeBet", page_icon="⚽", layout="wide", initial_sidebar_state="collapsed")
@@ -353,6 +354,47 @@ def dashboard(user):
         st.caption(f"Based on {acc['settled']} settled tips. If neither model beats 'Bookmaker odds' after "
                    "~100 tips, the AI isn't adding information. If one model is clearly better, keep only it "
                    "to halve the cost.")
+
+    monthly_report()
+
+
+def monthly_report():
+    """How the daily tips did in a month, overall and per market, with the best market."""
+    st.markdown("#### 📅 Daily tips · monthly report")
+    months = reports.months()
+    if not months:
+        st.caption("Shows once daily tips have been analysed.")
+        return
+    month = st.selectbox("Month", months, format_func=lambda m: date.fromisoformat(m + "-01").strftime("%B %Y"),
+                         key="report_month", label_visibility="collapsed")
+    r = reports.monthly(month)
+    t = r["total"]
+    c = st.columns(4)
+    c[0].metric("Tips", t["tips"], f"{t['pending']} pending" if t["pending"] else None, delta_color="off")
+    c[1].metric("Won – lost", f"{t['won']} – {t['lost']}",
+                f"{t['win_rate']:.0%} won" if t["win_rate"] is not None else None, delta_color="off")
+    c[2].metric("Profit (1 unit each)", f"{t['profit']:+.2f}u",
+                f"ROI {t['roi']:+.0%}" if t["roi"] is not None else None)
+    c[3].metric("Average odds", fmt_odds(t["avg_odds"]),
+                f"needs {t['break_even']:.0%} to break even" if t["break_even"] else None, delta_color="off")
+    best, worst = r["best"], r["worst"]
+    if best:
+        st.success(f"🏆 **Best market: {best['market']}** - {best['won']} of {best['settled']} won "
+                   f"({best['win_rate']:.0%}), **{best['profit']:+.2f} units** (ROI {best['roi']:+.0%}).")
+        if worst and worst["market"] != best["market"] and (worst["roi"] or 0) < 0:
+            st.warning(f"⚠️ **Weakest: {worst['market']}** - {worst['won']} of {worst['settled']} won, "
+                       f"{worst['profit']:+.2f} units (ROI {worst['roi']:+.0%}).")
+    else:
+        st.caption(f"The best market is named once a market has {reports.MIN_FOR_BEST}+ settled tips this month.")
+    st.dataframe(pd.DataFrame([{
+        "Market": m["market"], "Tips": m["tips"], "Won–lost": f"{m['won']}–{m['lost']}",
+        "Win rate": f"{m['win_rate']:.0%}" if m["win_rate"] is not None else "—",
+        "Avg odds": fmt_odds(m["avg_odds"]),
+        "Profit": f"{m['profit']:+.2f}u" if m["settled"] else "—",
+        "ROI": f"{m['roi']:+.0%}" if m["roi"] is not None else "—",
+    } for m in r["markets"]]), hide_index=True, width="stretch")
+    st.caption("Profit = 1 unit on every tip at the listed odds. A market is only called 'best' with "
+               f"{reports.MIN_FOR_BEST}+ settled tips; a month is a small sample, so compare several months.")
 
 
 # ---------------------------------------------------------------------------
