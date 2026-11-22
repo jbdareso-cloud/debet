@@ -6,7 +6,7 @@ Silver   = the alternative: the best value pick if one passed the challenge roun
 Accumulator = one leg per tier match, each on that match's likeliest market both models agree on
            (the tipped market or an alternative), skipping legs too short to add anything.
 
-Built from every analysed tip of the day (the automatic 13:00 analysis and any picks added by hand) and
+Built from every analysed tip of the day (the automatic hourly analysis and any picks added by hand) and
 published to clients automatically when an analysis finishes.
 """
 
@@ -57,7 +57,7 @@ def _agreed_markets(tip):
 
 
 def day_tips(day):
-    """Every analysed tip for a match day: the automatic 13:00 analysis plus any picks added by hand."""
+    """Every analysed tip for a match day: the automatic hourly analysis plus any picks added by hand."""
     return [t for t in db.list_tips(limit=300)
             if str(t.get("match_date"))[:10] == day and t.get("p_final") is not None]
 
