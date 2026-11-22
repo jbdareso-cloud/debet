@@ -401,7 +401,7 @@ def monthly_report():
 # 2. Analyse (AI debate)
 # ---------------------------------------------------------------------------
 def start_todays_run(today):
-    """Read today's tips and start their analysis now (same as the 13:00 scheduled run)."""
+    """Read today's tips and start their analysis now (same as the hourly scheduled run)."""
     try:
         rows, _ = ts.read_tips()
     except RuntimeError as exc:
@@ -412,7 +412,8 @@ def start_todays_run(today):
         st.warning("Today's tips aren't posted yet - try again later.")
         return
     entries = [{"line": r["line"], "group": db.TIP_GROUPS[0], "slot_number": n} for n, r in enumerate(todays, 1)]
-    db.update_setting("AUTO_RUN_DATE", today)  # the 13:00 automatic run then knows today is done
+    if len(todays) >= 4:  # all posted: the hourly run can stop looking today
+        db.update_setting("AUTO_RUN_DATE", f"{today}:full")
     ajobs.start(entries, "", today)
     st.rerun()
 
@@ -427,7 +428,8 @@ def analyse_tab():
     if any(str(t.get("match_date"))[:10] == today for t in job_tips):
         job_summary(job)
         return
-    st.info("⏳ **Today's tips haven't been analysed yet.** They'll be ready after 13:00.")
+    st.info("⏳ **Today's tips haven't been analysed yet.** DeBet checks every hour from 10:00 to 18:00 and "
+            "analyses them as soon as they're posted.")
     if st.button("▶️ Analyse today's tips now", width="stretch"):
         with st.spinner("Getting today's tips..."):
             start_todays_run(today)
@@ -810,7 +812,8 @@ def tier_cards(day_data, show_results=False):
 
 def clients_tab():
     """You: enter your own picks for clients, check the tiers, publish them, see who signed up."""
-    st.caption("Every day after the 13:00 analysis, DeBet's pick (Platinum), the runner-up (Gold), the "
+    st.caption("Every day, as soon as the tips are analysed (checked hourly 10:00-18:00), DeBet's pick (Platinum), "
+               "the runner-up (Gold), the "
                "alternative (Silver) and the accumulator go live to clients automatically. You can add extra "
                "picks below (about $0.015 each) - the tiers are then rebuilt from all of the day's tips.")
     job = db.latest_job()
@@ -846,7 +849,7 @@ def clients_tab():
     saved = db.get_client_day(day)
     st.markdown(f"#### Tiers for {fmt_date(day)}")
     if not built:
-        st.info("Nothing analysed for this day yet - the tiers appear after the 13:00 analysis.")
+        st.info("Nothing analysed for this day yet - the tiers appear as soon as the day's tips are analysed.")
     else:
         live = bool(saved and saved.get("published_at"))
         st.markdown(("🟢 **Live for clients** - published automatically when your picks finished analysing."
@@ -1148,7 +1151,7 @@ def client_tips(user):
         if current.get("acca"):
             show('<div class="vip-sec">🎟️ VIP accumulator</div>' + vip_acca_table(current["acca"]),
                  unsafe_allow_html=True)
-    elif now.hour >= 23:  # the last check of the day has run and nothing was posted
+    elif (now.hour, now.minute) >= (18, 30):  # the 18:00 check (the last) has run and nothing was posted
         show('<div class="vip-empty"><b>No VIP tips today.</b><br>We only post when there are selections worth '
              'betting on - see you tomorrow.</div>', unsafe_allow_html=True)
     else:
