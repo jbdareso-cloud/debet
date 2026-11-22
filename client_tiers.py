@@ -6,7 +6,8 @@ Silver   = the alternative: the best value pick if one passed the challenge roun
 Accumulator = one leg per tier match, each on that match's likeliest market both models agree on
            (the tipped market or an alternative), skipping legs too short to add anything.
 
-Only picks in the user's own group (TIP_GROUPS[1]) are ever used - never the daily tips site's tips.
+Built from every analysed tip of the day (the automatic 13:00 analysis and any picks added by hand) and
+published to clients automatically when an analysis finishes.
 """
 
 import json
@@ -55,16 +56,15 @@ def _agreed_markets(tip):
     return sorted(out, reverse=True)
 
 
-def own_picks(day):
-    """The user's own analysed picks for a match day."""
+def day_tips(day):
+    """Every analysed tip for a match day: the automatic 13:00 analysis plus any picks added by hand."""
     return [t for t in db.list_tips(limit=300)
-            if t.get("tip_group") == db.TIP_GROUPS[1] and str(t.get("match_date"))[:10] == day
-            and t.get("p_final") is not None]
+            if str(t.get("match_date"))[:10] == day and t.get("p_final") is not None]
 
 
 def build_day(day):
-    """The tiers and accumulator for a day, or None if there are no analysed own picks."""
-    tips = own_picks(day)
+    """The tiers and accumulator for a day, or None if nothing was analysed for it."""
+    tips = day_tips(day)
     agreed = [t for t in tips if t.get("decision") != "SPLIT"] or tips
     if not agreed:
         return None
