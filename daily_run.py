@@ -1,4 +1,4 @@
-"""Scheduled daily run (GitHub Actions, 13:00 Uganda time): read today's tips and analyse them.
+"""Scheduled daily run (GitHub Actions, hourly 10:00-18:00 Uganda time): read today's tips and analyse them.
 
 Source: TaifaTips (4 tips -> slots #1-#4). More sites can be added to SOURCES if they allow it.
 Before that, earlier days' pending tips are settled from API-Football's free results (results_api.py).
