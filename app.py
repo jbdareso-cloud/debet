@@ -18,7 +18,7 @@ def _load_cloud_secrets():
     rest of DeBet reads them. Locally there's no secrets file and .env is used instead."""
     import os
     try:
-        for key in ("OPENROUTER_API_KEY", "DATABASE_URL"):
+        for key in ("OPENROUTER_API_KEY", "DATABASE_URL", "API_FOOTBALL_KEY"):
             if key in st.secrets and not os.environ.get(key):
                 os.environ[key] = str(st.secrets[key])
     except Exception:
