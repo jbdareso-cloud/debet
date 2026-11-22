@@ -1,12 +1,12 @@
 # Daily automatic analysis of the 4 daily tips (see daily_run.py).
-# Every hour from 13:00 to 23:00 Uganda time (10:00-20:00 UTC): tips are often posted in the evening for
-# late kickoffs, so each run analyses only tips it hasn't seen yet, and stops looking once all 4 are in.
+# Every hour from 10:00 to 18:00 Uganda time (07:00-15:00 UTC): the day's tips are posted some time in that
+# window (or not at all). Each run analyses only tips it hasn't seen yet and stops looking once all 4 are in.
 # Runs that find nothing new cost nothing (no AI).
 name: Daily tips analysis
 
 on:
   schedule:
-    - cron: "0 10-20 * * *"
+    - cron: "0 7-15 * * *"
   workflow_dispatch:      # "Run workflow" button on GitHub, for a manual run
     inputs:
       check_results:
