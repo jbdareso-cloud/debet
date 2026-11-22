@@ -43,11 +43,15 @@ def _key(line):
 
 
 def collect(today):
-    """Today's new tips from every source not yet done today. Returns (entries, sources_found)."""
-    entries, found = [], []
+    """Today's not-yet-analysed tips from every source that isn't complete for today.
+    Sites often post some tips at midday and the rest in the evening (for late kickoffs), so a source is
+    only 'complete' once all its slots are filled; until then every hourly run picks up what's new.
+    Returns (entries, sources_completed)."""
+    entries, completed = [], []
+    full = f"{today.isoformat()}:full"
     for name, reader, done_key, group, slots in SOURCES:
-        if db.get_setting(done_key) == today.isoformat():
-            print(f"{name}: already done today.")
+        if db.get_setting(done_key) == full:
+            print(f"{name}: all {len(slots)} tips already analysed today.")
             continue
         try:
             rows, _ = reader(today)
@@ -58,15 +62,16 @@ def collect(today):
         todays.sort(key=lambda r: (_odds(r["line"]) or 99) < ve.MIN_ODDS)  # too-short prices go last
         todays = todays[:len(slots)]
         if not todays:
-            print(f"{name}: no tips for {today} yet - a later run will try again.")
+            print(f"{name}: no tips for {today} yet - the next hourly run will look again.")
             continue
-        found.append((name, done_key))
         already = db.find_duplicates([_key(r["line"]) for r in todays])
         new = [{"line": r["line"], "group": db.TIP_GROUPS[group], "slot_number": n}
                for n, r in zip(slots, todays) if _key(r["line"]) not in already]
-        print(f"{name}: {len(todays)} tip(s) today, {len(new)} not analysed yet.")
+        print(f"{name}: {len(todays)} of {len(slots)} tips posted today, {len(new)} not analysed yet.")
+        if len(todays) >= len(slots):
+            completed.append((name, done_key))
         entries += new
-    return entries, found
+    return entries, completed
 
 
 def main():
@@ -80,9 +85,9 @@ def main():
     except Exception as exc:  # results must never stop today's analysis
         print(f"Results step failed: {exc}")
 
-    entries, found = collect(today)
-    for _, done_key in found:  # mark first, so an overlapping retry can't pay twice
-        db.update_setting(done_key, today.isoformat())
+    entries, completed = collect(today)
+    for _, done_key in completed:  # all slots posted: later runs today can skip the page
+        db.update_setting(done_key, f"{today.isoformat()}:full")
     if not entries:
         print("Nothing new to analyse.")
         return
