@@ -810,16 +810,16 @@ def tier_cards(day_data, show_results=False):
 
 def clients_tab():
     """You: enter your own picks for clients, check the tiers, publish them, see who signed up."""
-    st.caption("Type your picks and press Analyse - when the analysis finishes (1-2 minutes) the Platinum, Gold, "
-               "Silver and accumulator go live to clients automatically. Only these picks are ever shown to "
-               "clients. Each pick costs about $0.015 to analyse.")
+    st.caption("Every day after the 13:00 analysis, DeBet's pick (Platinum), the runner-up (Gold), the "
+               "alternative (Silver) and the accumulator go live to clients automatically. You can add extra "
+               "picks below (about $0.015 each) - the tiers are then rebuilt from all of the day's tips.")
     job = db.latest_job()
     if job and job["status"] == "running":
         job_progress(job["id"])
         return
     day = st.date_input("Match day", datetime.now(EAT).date(), format="YYYY-MM-DD", key="client_day").isoformat()
     with st.form("my_picks", clear_on_submit=True):
-        text = st.text_area("My picks (one per line, with odds)", height=130,
+        text = st.text_area("Extra picks (optional, one per line, with odds)", height=110,
                             placeholder="Arsenal vs Chelsea over 2.5 1.95\nRoma vs Lazio 1 2.10")
         go = st.form_submit_button("⚔️ Analyse my picks", type="primary")
     if go:
@@ -846,7 +846,7 @@ def clients_tab():
     saved = db.get_client_day(day)
     st.markdown(f"#### Tiers for {fmt_date(day)}")
     if not built:
-        st.info("No analysed picks of yours for this day yet.")
+        st.info("Nothing analysed for this day yet - the tiers appear after the 13:00 analysis.")
     else:
         live = bool(saved and saved.get("published_at"))
         st.markdown(("🟢 **Live for clients** - published automatically when your picks finished analysing."
