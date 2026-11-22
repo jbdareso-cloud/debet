@@ -760,7 +760,76 @@ def bets_tab(user):
 # ---------------------------------------------------------------------------
 # 4. Results
 # ---------------------------------------------------------------------------
+RES_ICON = {"WON": "✅", "LOST": "❌", "VOID": "⚪", "PENDING": "⏳", None: "⏳"}
+
+
+def _units(results):
+    """(won, lost, profit in units) for [(result, odds)] at 1 unit each."""
+    won = sum(r == "WON" for r, _ in results)
+    lost = sum(r == "LOST" for r, _ in results)
+    profit = sum((o - 1) if r == "WON" else -1 for r, o in results if r in ("WON", "LOST") and o)
+    return won, lost, profit
+
+
+def day_by_day(days=14):
+    """One box per day: how the daily tips did, and how DeBet's own picks did."""
+    st.markdown("#### 📆 Day by day")
+    tips = [t for t in db.list_tips(limit=400) if t.get("match_date")]
+    since = (datetime.now(EAT).date() - timedelta(days=days)).isoformat()
+    dates = sorted({str(t["match_date"])[:10] for t in tips if str(t["match_date"])[:10] >= since}, reverse=True)
+    if not dates:
+        st.caption("Each day's results will appear here.")
+        return
+    for day in dates:
+        daily = sorted((t for t in tips if str(t["match_date"])[:10] == day and t.get("tip_group") == db.TIP_GROUPS[0]),
+                       key=lambda t: t.get("slot_number") or 99)
+        saved = db.get_client_day(day)
+        picks = saved if saved and saved.get("published_at") else ct.build_day(day)
+        with st.container(border=True):
+            d_won, d_lost, d_profit = _units([(t["result"], t.get("odds")) for t in daily])
+            ai_rows = [(k, title, picks.get(k)) for k, title, _ in TIERS] if picks else []
+            ai_res = [(ct.outcome(sel), sel.get("odds") or sel.get("min_odds")) for _, _, sel in ai_rows if sel]
+            a_won, a_lost, a_profit = _units(ai_res)
+            head = f"**{fmt_date(day)}**"
+            if d_won + d_lost:
+                head += f" · Daily tips **{d_won}/{d_won + d_lost}** ({d_profit:+.2f}u)"
+            if a_won + a_lost:
+                head += f" · DeBet **{a_won}/{a_won + a_lost}** ({a_profit:+.2f}u)"
+            st.markdown(head)
+            c = st.columns(2)
+            with c[0]:
+                st.markdown(":gray[**DAILY TIPS**]")
+                if not daily:
+                    st.caption("No daily tips this day.")
+                for t in daily:
+                    score = f" · {t['final_score']}" if t.get("final_score") else ""
+                    st.markdown(f"{RES_ICON.get(t['result'], '⏳')} {t['match_name']}  \n"
+                                f":gray[{t['user_proposed_tip']} @ {fmt_odds(t.get('odds'))}{score}]")
+            with c[1]:
+                live = " · published" if saved and saved.get("published_at") else ""
+                st.markdown(f":gray[**DEBET (AI){live.upper()}**]")
+                if not picks:
+                    st.caption("Not analysed.")
+                for k, title, sel in ai_rows:
+                    if not sel:
+                        continue
+                    price = f"@ {fmt_odds(sel['odds'])}" if sel.get("odds") else f"min {sel['min_odds']:.2f}"
+                    st.markdown(f"{RES_ICON[ct.outcome(sel)]} {title.split()[0]} {sel['match']}  \n"
+                                f":gray[{sel['market']} {price}]")
+                acca = (picks or {}).get("acca")
+                if acca:
+                    st.markdown(f"{RES_ICON[ct.acca_outcome(acca)]} 🎟️ Accumulator · {len(acca['legs'])} legs  \n"
+                                f":gray[take {acca['min_odds']:.2f}+]")
+    st.caption("Units = 1 unit on each tip at its odds (DeBet's alternative picks at their minimum odds).")
+
+
 def results_tab():
+    day_by_day()
+    with st.expander("✏️ Enter results & closing odds by hand"):
+        manual_results()
+
+
+def manual_results():
     last = rv.get_last_checked()
     c = st.columns([1, 2], vertical_alignment="center")
     if c[0].button("🔎 Check results now", type="primary", width="stretch"):
@@ -768,8 +837,8 @@ def results_tab():
             st.session_state["last_verification"] = rv.verify_pending_tips(force=True)
         st.rerun()
     c[1].caption(f"Last check: {last.strftime('%d %b %H:%M UTC') if last else 'never'}. "
-                 "Never runs on its own. The button looks up scores with AI (about $0.005 per match) - "
-                 "or just enter results yourself below for free.")
+                 "Results arrive by themselves every hour (free). This button is a paid AI backup "
+                 "(about $0.005 per match) - or enter results yourself below for free.")
     summary = st.session_state.get("last_verification") or BOOT.get("startup_verification")
     if summary and not summary.get("skipped"):
         st.success(f"Checked {summary['checked']} · settled {len(summary['settled'])} · "
@@ -777,7 +846,6 @@ def results_tab():
         for err in summary["errors"]:
             st.warning(f"{err['match']}: {err['error']}")
 
-    st.markdown("#### ✏️ Results & closing odds")
     st.caption("**Closing odds** = the price for the same tip just before kickoff. Getting better odds than the "
                "closing price, again and again, is the earliest sign of a real edge.")
     flt = st.radio("Show", ["PENDING", "WON", "LOST", "VOID", "All"], horizontal=True, label_visibility="collapsed")
