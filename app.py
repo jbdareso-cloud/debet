@@ -176,17 +176,39 @@ def current_user():
     return user
 
 
+def _go(page):
+    """Switch between the Log in and Join pages (also shareable: ?page=join)."""
+    if page:
+        st.query_params["page"] = page
+    else:
+        st.query_params.clear()
+
+
 def login_page():
+    """Two separate pages: Log in (default) and Join (?page=join), each with a link to the other."""
+    joining = st.query_params.get("page") == "join"
     st.markdown('<div class="db-brand">DE<span>BET</span></div>'
                 '<div class="db-kicker">Daily football tips</div>', unsafe_allow_html=True)
     _, mid, _ = st.columns([1, 2, 1])
     with mid:
-        t_join, t_login = st.tabs(["Join free", "Log in"])
-    with t_join, st.form("join"):
+        if joining:
+            join_form()
+            st.markdown("Already have an account?")
+            st.button("Log in instead", width="stretch", on_click=_go, args=(None,))
+        else:
+            login_form()
+            st.markdown("New here?")
+            st.button("Create a free account", width="stretch", on_click=_go, args=("join",))
+        st.caption("[Privacy](?page=privacy) · [Terms](?page=terms)")
+
+
+def join_form():
+    st.markdown("### Create your free account")
+    with st.form("join"):
         phone = st.text_input("Phone number", placeholder="0772 123456")
         pw = st.text_input("Choose a password (6+ characters)", type="password")
         adult = st.checkbox("I'm 18+ and I understand tips are opinions, not guarantees.")
-        if st.form_submit_button("Join", type="primary", width="stretch"):
+        if st.form_submit_button("Create account", type="primary", width="stretch"):
             digits = db.normalize_phone(phone)
             if len(digits) < 9:
                 st.error("Enter your phone number.")
@@ -201,8 +223,13 @@ def login_page():
                     st.error(str(exc))
                 else:
                     start_session(user["id"])
+                    st.query_params.clear()
                     st.rerun()
-    with t_login, st.form("login"):
+
+
+def login_form():
+    st.markdown("### Log in")
+    with st.form("login"):
         ident = st.text_input("Phone number", placeholder="0772 123456")
         pw = st.text_input("Password", type="password")
         if st.form_submit_button("Log in", type="primary", width="stretch"):
@@ -217,7 +244,6 @@ def login_page():
                 st.rerun()
             db.record_login_failure(ident)
             st.error("Wrong phone number or password.")
-    st.caption("[Privacy](?page=privacy) · [Terms](?page=terms)")
 
 
 # ---------------------------------------------------------------------------
