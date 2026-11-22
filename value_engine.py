@@ -72,7 +72,10 @@ ESTIMATE_SYSTEM = (
     "accurately as possible, so the strongest tips stand out from the rest. Estimate full-time "
     "(90 minutes + stoppage) probabilities. When the market price of the tipped selection is given, it "
     "is the best summary of all public information: START from it and adjust for what the brief shows - "
-    "confirmed absences, form, xG, home/away record, motivation, rest. Do not pull numbers toward 50% "
+    "confirmed absences, form, xG, home/away record, motivation, rest. A MATCH DATA section, when present, "
+    "is verified statistics (league table, season and home/away records, goals, last 5, head-to-head, "
+    "injuries): rely on it, cite its numbers in your reasons, and let a clear gap between the teams move "
+    "you decisively. Do not pull numbers toward 50% "
     "just because you are unsure; when the brief adds little, stay close to the market price. Confirmed "
     "information moves you more than unconfirmed. Prices can be wrong, and finding where is the whole "
     "point. Check actively for these signs of a mispriced selection: (1) a popular or big-name team "
@@ -197,8 +200,8 @@ def market_anchor(market_label, odds):
     fair = 1 / odds / BOOKMAKER_MARGIN
     return (f"Tipped selection: {market_label} at odds {odds:.2f} - the market rates it about {fair:.0%} "
             f"after the bookmaker's margin. Start from {fair:.0%} for this market and move it only for "
-            "concrete evidence in the brief - normally within 8 points either way, up to 15 when confirmed "
-            "team news or a clear mispricing sign justifies it.\n")
+            "concrete evidence in the brief - normally within 8 points either way, up to 15 when the match data, "
+            "confirmed team news or a clear mispricing sign justifies it.\n")
 
 
 def _estimate(models, label, match, match_date, brief, extra, custom, usage, anchor=""):
@@ -254,6 +257,13 @@ def _analyze(tip_text, extra_notes, default_match_date, usage):
     meta, brief = _extract_meta(brief_raw)
     meta = meta or {}
     match_date, date_source, date_warning = resolve_match_date(meta, default_match_date, started.date())
+    try:  # verified statistics (free) go first, so the models judge from numbers, not only from web search
+        import match_data
+        data = match_data.match_block(tip["match_name"], match_date or default_match_date or started.date())
+    except Exception:
+        data = ""
+    if data:
+        brief = f"{data}\n=== WEB BRIEF ===\n{brief}"
 
     custom = None if key else market
     anchor = market_anchor(MARKET_LABELS.get(key, market) if key else f"{market} (the 'custom' item)", tip["odds"])
