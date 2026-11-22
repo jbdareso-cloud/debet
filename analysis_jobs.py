@@ -31,11 +31,11 @@ def run_now(entries, notes, default_date):
 
 
 def publish_client_days(tip_ids):
-    """Your own picks go live to clients automatically: rebuild and publish the tiers of every match day
-    that has own picks in this run. The daily-site tips (TIP_GROUPS[0]) are never published."""
+    """Clients' tiers go live automatically: rebuild and publish Platinum / Gold / Silver and the accumulator
+    for every match day analysed in this run (the 13:00 run, or picks added by hand)."""
     import client_tiers as ct  # here, to keep this module light for the scheduled run
     days = {str(t.get("match_date"))[:10] for t in (db.get_tip(i) for i in tip_ids)
-            if t and t.get("tip_group") == db.TIP_GROUPS[1] and t.get("match_date")}
+            if t and t.get("match_date")}
     for day in sorted(days):
         try:
             data = ct.build_day(day)
