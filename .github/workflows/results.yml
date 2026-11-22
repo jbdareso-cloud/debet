@@ -1,0 +1,29 @@
+# Free results check (API-Football, no AI): every hour from 14:15 to 02:15 Uganda time, settle today's
+# finished matches and yesterday's leftovers, so results and clients' bets update soon after full time.
+# Uses at most 2 of the 100 free daily requests per run (13 runs -> 26 a day at most).
+name: Hourly results
+
+on:
+  schedule:
+    - cron: "15 11-23 * * *"   # 14:15 - 02:15 Uganda time (UTC+3)
+  workflow_dispatch: {}
+
+concurrency:
+  group: results
+  cancel-in-progress: false
+
+jobs:
+  settle:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - run: python results_api.py --settle
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          API_FOOTBALL_KEY: ${{ secrets.API_FOOTBALL_KEY }}
