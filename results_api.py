@@ -56,9 +56,15 @@ def fetch_day(day, key):
         if h is None or a is None:  # some feeds only fill "goals"
             goals = f.get("goals") or {}
             h, a = goals.get("home"), goals.get("away")
-        games.append({"home": ((f.get("teams") or {}).get("home") or {}).get("name", ""),
-                      "away": ((f.get("teams") or {}).get("away") or {}).get("name", ""),
-                      "status": status, "score": f"{h}-{a}" if status in FINISHED and h is not None else None})
+        teams, league = f.get("teams") or {}, f.get("league") or {}
+        games.append({"home": (teams.get("home") or {}).get("name", ""),
+                      "away": (teams.get("away") or {}).get("name", ""),
+                      "status": status, "score": f"{h}-{a}" if status in FINISHED and h is not None else None,
+                      # for the pre-match data (match_data.py)
+                      "fixture_id": (f.get("fixture") or {}).get("id"), "kickoff": (f.get("fixture") or {}).get("date"),
+                      "home_id": (teams.get("home") or {}).get("id"), "away_id": (teams.get("away") or {}).get("id"),
+                      "league_id": league.get("id"), "season": league.get("season"),
+                      "league": f"{league.get('country') or ''} {league.get('name') or ''}".strip()})
     return games
 
 
