@@ -1,13 +1,12 @@
-# Daily automatic analysis of the 4 TaifaTips tips (see daily_run.py).
-# 13:00 Uganda time = 10:00 UTC. Two later tries (14:30, 16:00 Uganda) only do work if the tips
-# weren't posted yet - daily_run.py never analyses the same day twice.
+# Daily automatic analysis of the 4 daily tips (see daily_run.py).
+# Every hour from 13:00 to 23:00 Uganda time (10:00-20:00 UTC): tips are often posted in the evening for
+# late kickoffs, so each run analyses only tips it hasn't seen yet, and stops looking once all 4 are in.
+# Runs that find nothing new cost nothing (no AI).
 name: Daily tips analysis
 
 on:
   schedule:
-    - cron: "0 10 * * *"
-    - cron: "30 11 * * *"
-    - cron: "0 13 * * *"
+    - cron: "0 10-20 * * *"
   workflow_dispatch:      # "Run workflow" button on GitHub, for a manual run
     inputs:
       check_results:
