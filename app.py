@@ -1148,6 +1148,9 @@ def client_tips(user):
         if current.get("acca"):
             show('<div class="vip-sec">🎟️ VIP accumulator</div>' + vip_acca_table(current["acca"]),
                  unsafe_allow_html=True)
+    elif now.hour >= 23:  # the last check of the day has run and nothing was posted
+        show('<div class="vip-empty"><b>No VIP tips today.</b><br>We only post when there are selections worth '
+             'betting on - see you tomorrow.</div>', unsafe_allow_html=True)
     else:
         show('<div class="vip-empty">Today\'s VIP selections will appear here once they\'re ready.</div>',
              unsafe_allow_html=True)
