@@ -7,10 +7,7 @@ The bookmaker-style 'advice' and percentages API-Football adds are deliberately 
 judge the numbers themselves. Needs API_FOOTBALL_KEY; without it (or if the match isn't found) returns "".
 """
 
-import json
 import os
-import urllib.parse
-import urllib.request
 from datetime import date
 
 import results_api as ra
@@ -22,13 +19,7 @@ _cache = {}  # (endpoint, params) -> response list, for one process (one run)
 def _get(endpoint, key, **params):
     ck = (endpoint, tuple(sorted(params.items())))
     if ck not in _cache:
-        req = urllib.request.Request(BASE + endpoint + "?" + urllib.parse.urlencode(params),
-                                     headers={"x-apisports-key": key})
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-        if data.get("errors"):
-            raise RuntimeError(f"API-Football: {data['errors']}")
-        _cache[ck] = data.get("response") or []
+        _cache[ck] = ra.api_get(endpoint, key, **params)
     return _cache[ck]
 
 
