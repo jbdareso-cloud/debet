@@ -196,6 +196,9 @@ def settle_pending(key=None, today=None, log=print, include_today=False, lookbac
         log("API-Football is paused for 24 hours after a refusal (suspended or over its limit).")
     if fd_key:
         sources.append(("football-data.org", lambda d: fd_fetch_day(d, fd_key)))
+    if allow_ai:  # free CSV files (many more leagues, 1-3 days behind) - tried just before the paid AI check
+        import couk_data
+        sources.append(("football-data.co.uk", lambda d: couk_data.fetch_day(d) if d < today else []))
     oldest = today - timedelta(days=lookback)
     by_day = {}
     for t in db.list_tips(result="PENDING", limit=200):
