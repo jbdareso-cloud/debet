@@ -81,7 +81,8 @@ def main():
     db.init_db(seed_admin=False)
 
     try:  # first settle earlier days' tips from the free results service (no AI)
-        results_api.settle_pending(today=today)
+        # the 10:00 run may use the AI web check for earlier matches the free sources didn't find (max 2 tries)
+        results_api.settle_pending(today=today, allow_ai=datetime.now(UGANDA).hour == 10)
     except Exception as exc:  # results must never stop today's analysis
         print(f"Results step failed: {exc}")
 
