@@ -72,10 +72,10 @@ ESTIMATE_SYSTEM = (
     "accurately as possible, so the strongest tips stand out from the rest. Estimate full-time "
     "(90 minutes + stoppage) probabilities. When the market price of the tipped selection is given, it "
     "is the best summary of all public information: START from it and adjust for what the brief shows - "
-    "confirmed absences, form, xG, home/away record, motivation, rest. A MATCH DATA section, when present, "
-    "is verified statistics (league table, season and home/away records, goals, last 5, head-to-head, "
-    "injuries): rely on it, cite its numbers in your reasons, and let a clear gap between the teams move "
-    "you decisively. Do not pull numbers toward 50% "
+    "confirmed absences, form, xG, home/away record, motivation, rest. MATCH DATA and TEAM STATS sections, "
+    "when present, are verified statistics (league table, season and home/away records, goals, last results, "
+    "shots, head-to-head, injuries): rely on them, cite their numbers in your reasons, and let a clear gap "
+    "between the teams move you decisively. Do not pull numbers toward 50% "
     "just because you are unsure; when the brief adds little, stay close to the market price. Confirmed "
     "information moves you more than unconfirmed. Prices can be wrong, and finding where is the whole "
     "point. Check actively for these signs of a mispriced selection: (1) a popular or big-name team "
@@ -257,11 +257,20 @@ def _analyze(tip_text, extra_notes, default_match_date, usage):
     meta, brief = _extract_meta(brief_raw)
     meta = meta or {}
     match_date, date_source, date_warning = resolve_match_date(meta, default_match_date, started.date())
+    data_day = match_date or default_match_date or started.date()
+    data = ""
     try:  # verified statistics (free) go first, so the models judge from numbers, not only from web search
         import match_data
-        data = match_data.match_block(tip["match_name"], match_date or default_match_date or started.date())
+        data = match_data.match_block(tip["match_name"], data_day)
+        if data.startswith("MATCH DATA:"):  # only a 'not found / unavailable' note - the CSV stats below cover it
+            data = ""
     except Exception:
-        data = ""
+        pass
+    try:  # football-data.co.uk results: table, home/away form, last 6, shots, head-to-head (free, many leagues)
+        import couk_data
+        data += couk_data.stats_block(tip["match_name"], data_day)
+    except Exception:
+        pass
     if data:
         brief = f"{data}\n=== WEB BRIEF ===\n{brief}"
 
