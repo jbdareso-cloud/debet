@@ -88,6 +88,8 @@ def match_block(match_name, day, key=None):
     key = key or os.environ.get("API_FOOTBALL_KEY", "").strip()
     if not key or not match_name:
         return ""
+    if not ra.af_available():
+        return "MATCH DATA: unavailable (API-Football is paused after refusing requests) - rely on the brief.\n"
     try:
         day = date.fromisoformat(str(day)[:10])
         game = ra.find_game(match_name, _day_games(day, key))
