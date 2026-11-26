@@ -29,7 +29,7 @@ MAX_MODEL_GAP = 0.10    # skip if Grok and Claude are more than 10 points apart 
 MIN_ODDS = 1.40         # tips priced below this are recorded but not analysed (rarely value; saves cost)
 
 BRIEF_MAX_TOKENS = 500
-ESTIMATE_MAX_TOKENS = 600   # hidden reasoning counts too; 350 sometimes cut Grok's JSON off
+ESTIMATE_MAX_TOKENS = 1000  # reasons now cite match data; 600 cut Claude's JSON off (only used tokens are paid)
 CHALLENGE_MAX_TOKENS = 300
 
 GROK = [GROK_MODEL, GROK_FALLBACK_MODEL]
@@ -100,7 +100,7 @@ Return exactly this JSON (probabilities as decimals between 0 and 1):
 {{"home": 0.00, "draw": 0.00, "away": 0.00, "over15": 0.00, "over25": 0.00, "over35": 0.00, "btts": 0.00,{custom_key}
  "reasons": ["<price verdict: 'priced too short', 'priced too long' or 'fair price' - and the mispricing sign behind it>", "<the fact that moved you most>"],
  "missing": ["<important information the brief did not have>"]}}
-Rules: home + draw + away = 1. over15 >= over25 >= over35."""
+Rules: home + draw + away = 1. over15 >= over25 >= over35. Keep each reason under 30 words."""
 
 CHALLENGE_SYSTEM = (
     "You are the final checker before a bet. Your only job is to catch concrete problems: facts the "
