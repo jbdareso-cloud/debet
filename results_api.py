@@ -8,7 +8,9 @@ from the 90-minute score. Needs API_FOOTBALL_KEY in the environment; without it 
 import json
 import os
 import re
+import time
 import unicodedata
+import urllib.parse
 import urllib.request
 from datetime import date, datetime, timedelta, timezone
 from difflib import SequenceMatcher
@@ -40,16 +42,38 @@ def _same_team(a, b):
     return SequenceMatcher(None, a, b).ratio() >= 0.8
 
 
-def fetch_day(day, key):
-    """All fixtures on `day` (a date): [{"home", "away", "status", "score" ('2-1' at 90 min or None)}]."""
-    req = urllib.request.Request(API_URL.format(day=day.isoformat()), headers={"x-apisports-key": key})
-    with urllib.request.urlopen(req, timeout=30) as resp:
+MIN_GAP_SECONDS = 7      # at most ~8 requests a minute - the free plan's per-minute limit is 10
+MAX_PER_RUN = 40         # safety cap per job run (the free plan allows 100 a day)
+_state = {"last": 0.0, "count": 0, "blocked": None}
+
+
+def api_get(endpoint, key, **params):
+    """One polite API-Football request: paced, capped per run, and stops for the whole run after a refusal
+    (suspension, limit reached), so a problem never turns into a burst of further requests."""
+    if _state["blocked"]:
+        raise RuntimeError(_state["blocked"])
+    if _state["count"] >= MAX_PER_RUN:
+        raise RuntimeError(f"API-Football: per-run cap of {MAX_PER_RUN} requests reached")
+    wait = MIN_GAP_SECONDS - (time.monotonic() - _state["last"])
+    if wait > 0:
+        time.sleep(wait)
+    _state["last"], _state["count"] = time.monotonic(), _state["count"] + 1
+    url = "https://v3.football.api-sports.io/" + endpoint + "?" + urllib.parse.urlencode(params)
+    with urllib.request.urlopen(urllib.request.Request(url, headers={"x-apisports-key": key}), timeout=30) as resp:
         data = json.loads(resp.read().decode("utf-8"))
     errors = data.get("errors")
     if errors:
-        raise RuntimeError(f"API-Football: {errors}")
+        text = f"API-Football: {errors}"
+        if any(w in str(errors).lower() for w in ("suspend", "limit", "token", "access", "requests")):
+            _state["blocked"] = text  # don't keep knocking on a closed door this run
+        raise RuntimeError(text)
+    return data.get("response") or []
+
+
+def fetch_day(day, key):
+    """All fixtures on `day` (a date): [{"home", "away", "status", "score" ('2-1' at 90 min or None)}]."""
     games = []
-    for f in data.get("response") or []:
+    for f in api_get("fixtures", key, date=day.isoformat(), timezone="Africa/Kampala"):
         status = ((f.get("fixture") or {}).get("status") or {}).get("short")
         full = (f.get("score") or {}).get("fulltime") or {}
         h, a = full.get("home"), full.get("away")
